@@ -1,7 +1,8 @@
-# Tauri + React + Typescript
+# Murmure
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+Dictée vocale pour macOS, Linux et Windows (Tauri v2 + React). Voir `ARCHITECTURE.md`.
 
-## Recommended IDE Setup
-
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+- `pnpm tauri dev` : application complète.
+- `pnpm dev` : front seul dans un navigateur (http://localhost:1420), en **mode démo** (données factices).
+  - `?reset` réinitialise les données de démo (relance l'onboarding).
+  - `overlay.html?demo=recording|handsfree|transcribing|error` prévisualise la pastille.

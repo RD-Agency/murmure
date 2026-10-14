@@ -2647,6 +2647,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arboard",
+ "block2",
  "chrono",
  "cpal",
  "dirs 6.0.0",
@@ -2656,6 +2657,7 @@ dependencies = [
  "hound",
  "keyring",
  "log",
+ "objc2",
  "once_cell",
  "parking_lot",
  "reqwest 0.12.28",
