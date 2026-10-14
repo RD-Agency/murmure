@@ -34,6 +34,9 @@ env:
   S3_BUCKET: crgenerator
   S3_PREFIX: murmure
   PUBLIC_BASE: https://crgenerator.s3.eu-west-par.io.cloud.ovh.net/murmure
+  # OVH n'accepte pas les sommes de contrôle CRC par défaut des AWS CLI récents.
+  AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+  AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
 
 jobs:
   draft:
@@ -127,6 +130,7 @@ jobs:
       - name: Environnement de la tour (CUDA local, cache de compilation persistant)
         if: env.SELF_HOSTED == 'true'
         run: |
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"   # aws CLI installé côté utilisateur
           echo "CUDA_PATH=/usr/local/cuda-12.9" >> "$GITHUB_ENV"
           # Sans ça, CMake prend /usr/bin/nvcc (CUDA 11 d'Ubuntu) qui ignore les RTX 40/50.
           echo "CMAKE_CUDA_COMPILER=/usr/local/cuda-12.9/bin/nvcc" >> "$GITHUB_ENV"
@@ -237,10 +241,10 @@ jobs:
         run: |
           s3() { aws s3 cp "$@" --endpoint-url "$S3_ENDPOINT" --region "$S3_REGION" --acl public-read --only-show-errors; }
           s3 dl/SHA256SUMS.txt "s3://$S3_BUCKET/$S3_PREFIX/releases/$TAG/SHA256SUMS.txt"
-          # Liens stables sans numéro de version (copie côté serveur).
+          # Liens stables sans numéro de version. Envoi depuis les fichiers locaux : la copie
+          # serveur à serveur échoue chez OVH sur les objets multipart (ETag inattendu).
           while read -r src dst; do
-            aws s3 cp "s3://$S3_BUCKET/$S3_PREFIX/releases/$TAG/$src" "s3://$S3_BUCKET/$S3_PREFIX/latest/$dst" \
-              --endpoint-url "$S3_ENDPOINT" --region "$S3_REGION" --acl public-read --only-show-errors
+            s3 "dl/$src" "s3://$S3_BUCKET/$S3_PREFIX/latest/$dst"
           done < site/latest-map.txt
           s3 site/latest.json "s3://$S3_BUCKET/$S3_PREFIX/latest.json" --cache-control "no-cache" --content-type application/json
           s3 site/index.html  "s3://$S3_BUCKET/$S3_PREFIX/index.html"  --cache-control "no-cache" --content-type "text/html; charset=utf-8"
