@@ -1,6 +1,6 @@
 [package]
 name = "murmure"
-version = "0.1.1"
+version = "0.1.2"
 description = "Murmure — dictée vocale locale ou serveur"
 authors = ["RD Agency"]
 edition = "2024"
