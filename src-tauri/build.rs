@@ -11,5 +11,13 @@ fn main() {
             println!("cargo:rustc-link-lib=static=clang_rt.osx");
         }
     }
+    // whisper-rs cherche libcudart dans /usr/local/cuda (codé en dur). Sur une machine où ce lien
+    // pointe vers une autre version que celle du compilateur (ex. CUDA 13 installé à côté de 12.9),
+    // MURMURE_CUDA_LIB_DIR impose le bon dossier.
+    println!("cargo:rerun-if-env-changed=MURMURE_CUDA_LIB_DIR");
+    if let Ok(dir) = std::env::var("MURMURE_CUDA_LIB_DIR") {
+        println!("cargo:rustc-link-search=native={dir}");
+        println!("cargo:rustc-link-search=native={dir}/stubs");
+    }
     tauri_build::build()
 }

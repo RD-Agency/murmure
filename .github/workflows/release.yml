@@ -128,6 +128,11 @@ jobs:
         if: env.SELF_HOSTED == 'true'
         run: |
           echo "CUDA_PATH=/usr/local/cuda-12.9" >> "$GITHUB_ENV"
+          # Sans ça, CMake prend /usr/bin/nvcc (CUDA 11 d'Ubuntu) qui ignore les RTX 40/50.
+          echo "CMAKE_CUDA_COMPILER=/usr/local/cuda-12.9/bin/nvcc" >> "$GITHUB_ENV"
+          echo "CUDACXX=/usr/local/cuda-12.9/bin/nvcc" >> "$GITHUB_ENV"
+          # /usr/local/cuda pointe vers CUDA 13 sur la tour : on impose les bibliothèques 12.9 au lien.
+          echo "MURMURE_CUDA_LIB_DIR=/usr/local/cuda-12.9/lib64" >> "$GITHUB_ENV"
           echo "/usr/local/cuda-12.9/bin" >> "$GITHUB_PATH"
           echo "CARGO_TARGET_DIR=$HOME/.cache/murmure-ci/target-${{ matrix.suffix }}" >> "$GITHUB_ENV"
           # CUDA 12.9 sait compiler pour Blackwell (RTX 50) en natif.
@@ -167,7 +172,8 @@ jobs:
             unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_ISSUER APPLE_API_KEY
           fi
           ARGS=(--target "${{ matrix.target }}")
-          [ -n "${{ matrix.features }}" ] && ARGS+=(--features "${{ matrix.features }}")
+          # Variante CUDA : pas d'AppImage (linuxdeploy tente d'embarquer les bibliothèques du pilote NVIDIA).
+          [ -n "${{ matrix.features }}" ] && ARGS+=(--features "${{ matrix.features }}" --bundles deb,rpm)
           pnpm tauri build "${ARGS[@]}"
 
       - name: Rassembler les installeurs
@@ -225,7 +231,7 @@ jobs:
         run: |
           (cd dl && sha256sum $(ls | grep -v '\.sig$' | grep -v SHA256SUMS) > SHA256SUMS.txt && cat SHA256SUMS.txt)
           python3 .github/scripts/publish.py --dir dl --tag "$TAG" --base "$PUBLIC_BASE" --out site
-          ls -l site site/latest
+          ls -l site
 
       - name: Envoyer sur S3
         run: |
