@@ -13,7 +13,9 @@
 Au premier lancement, Murmure télécharge seul le modèle Whisper large-v3-turbo (~550 Mo), puis tout fonctionne hors ligne.
 Pour un déploiement en parc : `murmure --install-model` installe le modèle avant le premier lancement.
 
-**Mac** : si l'app n'est pas signée, faites clic droit › Ouvrir au premier lancement, puis autorisez le micro et l'Accessibilité.
+**Mac** : app signée et notarisée ; au premier lancement, autorisez le micro et l'Accessibilité.
 **Windows** : SmartScreen peut afficher « Informations complémentaires › Exécuter quand même » tant que l'app n'est pas signée.
+
+**Mises à jour** : automatiques et silencieuses (téléchargées en arrière-plan, appliquées quand l'app est inactive), sauf paquets Linux .deb/.rpm qui proposent un bouton.
 
 Vérification : `SHA256SUMS.txt`.

@@ -461,7 +461,8 @@ export function installMockHotkey() {
 }
 
 // ---------- Mises à jour simulées ----------
-// `?update` : une version 0.2.0 est disponible ; `?update=error` : serveur injoignable.
+// `?update` : une version 0.2.0 est disponible ; `?update=ready` : déjà téléchargée et en place ;
+// `?update=error` : serveur injoignable.
 
 export const MOCK_VERSION = "0.1.0";
 const updateParam = new URLSearchParams(location.search).get("update");
@@ -472,7 +473,7 @@ const MOCK_UPDATE =
 
 if (MOCK_UPDATE) {
   // Comme `updater::spawn_background` : annonce silencieuse peu après le démarrage.
-  setTimeout(() => mockEmit("update-available", MOCK_UPDATE), 1500);
+  setTimeout(() => mockEmit(updateParam === "ready" ? "update-ready" : "update-available", MOCK_UPDATE), 1500);
 }
 
 async function checkUpdate() {

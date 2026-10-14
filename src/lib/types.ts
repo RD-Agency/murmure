@@ -104,6 +104,8 @@ export interface EventMap {
   "settings-changed": Settings;
   navigate: View;
   "update-available": UpdateInfo;
+  /** Mise à jour téléchargée et en place : appliquée au prochain redémarrage (automatique). */
+  "update-ready": UpdateInfo;
   "update-progress": UpdateProgress;
 }
 

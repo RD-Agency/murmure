@@ -15,7 +15,7 @@ import type {
 export type SaveStatus = "idle" | "saving" | "saved" | "error";
 
 /** idle : rien vérifié · checking · uptodate · available · installing · error */
-export type UpdateStatus = "idle" | "checking" | "uptodate" | "available" | "installing" | "error";
+export type UpdateStatus = "idle" | "checking" | "uptodate" | "available" | "installing" | "ready" | "error";
 
 export interface UpdateSlice {
   status: UpdateStatus;
@@ -90,6 +90,7 @@ export const useApp = create<AppState>((set, get) => ({
           : { update: { status: "available", available: info, progress: null, error: null } },
       ),
     );
+    on("update-ready", (info) => set({ update: { status: "ready", available: info, progress: null, error: null } }));
     on("update-progress", (progress) =>
       // Aussi déclenché depuis le tray : on passe en « installing » à la première progression.
       set((st) => ({ update: { ...st.update, status: "installing", progress, error: null } })),
@@ -255,11 +256,15 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   checkUpdate: async () => {
-    if (get().update.status === "installing") return;
+    if (get().update.status === "installing" || get().update.status === "ready") return;
     set((st) => ({ update: { ...st.update, status: "checking", error: null } }));
     try {
       const info = await api.checkUpdate();
-      set({ update: { status: info ? "available" : "uptodate", available: info, progress: null, error: null } });
+      set((st) =>
+        st.update.status === "ready"
+          ? st
+          : { update: { status: info ? "available" : "uptodate", available: info, progress: null, error: null } },
+      );
     } catch (e) {
       set((st) => ({ update: { ...st.update, status: "error", error: errorMessage(e) } }));
     }
@@ -273,7 +278,12 @@ export const useApp = create<AppState>((set, get) => ({
       await api.installUpdate();
     } catch (e) {
       set((st) => ({
-        update: { ...st.update, status: st.update.available ? "available" : "error", progress: null, error: errorMessage(e) },
+        update: {
+          ...st.update,
+          status: st.update.status === "ready" ? "ready" : st.update.available ? "available" : "error",
+          progress: null,
+          error: errorMessage(e),
+        },
       }));
     }
   },

@@ -119,6 +119,17 @@ pub fn show_update(app: &AppHandle, version: &str) {
     }
 }
 
+/// Mise à jour téléchargée et prête : l'entrée propose de redémarrer tout de suite.
+pub fn show_update_ready(app: &AppHandle, version: &str) {
+    show_update(app, version);
+    if let Some(h) = app.try_state::<TrayHandles>()
+        && let Some(item) = h.update.lock().as_ref()
+    {
+        let _ = item.set_enabled(true);
+        let _ = item.set_text(format!("Redémarrer pour passer à la version {version}"));
+    }
+}
+
 /// Grise l'entrée de mise à jour pendant le téléchargement / l'installation.
 pub fn set_update_installing(app: &AppHandle, installing: bool) {
     if let Some(h) = app.try_state::<TrayHandles>()

@@ -195,13 +195,21 @@ pub fn encode_wav(samples: &[f32]) -> Vec<u8>;                     // PCM 16 bit
   ne vivent que dans `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (CI / poste de build).
 - `bundle.createUpdaterArtifacts: true` : `pnpm tauri build` produit `Murmure.app.tar.gz` + `.sig` (macOS),
   `.AppImage.tar.gz`/`.sig` ou équivalents (Linux), installeur + `.sig` (Windows, `installMode: "passive"`).
-- Vérification silencieuse 10 s après le démarrage puis toutes les 6 h, jamais pendant une dictée (attente
-  du retour à `idle`), désactivée en build debug. Rien n'est téléchargé sans action de l'utilisateur.
-- Mise à jour trouvée : `update-available`, entrée « Installer la mise à jour x.y.z » en tête du menu du tray,
-  bannière sur l'accueil, état dans Réglages › Général.
+- Vérification 10 s après le démarrage puis toutes les heures, jamais pendant une dictée, désactivée en build
+  debug. **Tout est automatique** : la mise à jour trouvée est téléchargée en silence (signature vérifiée),
+  installée sur disque (macOS, AppImage) ou gardée en mémoire (Windows), puis `update-ready` + entrée
+  « Redémarrer pour passer à la version x.y.z » du tray + bannière « prête ».
+- Redémarrage automatique quand l'app est inactive depuis 2 min (aucune dictée, aucun téléchargement de modèle,
+  fenêtre principale masquée) : marqueur `relaunch-hidden` dans le dossier de config puis `app.restart()` (ou
+  l'installeur NSIS sous Windows, qui relance l'app) ; au lancement suivant le marqueur est consommé et l'app
+  démarre sans fenêtre. Windows installe aussi en quittant l'app. Le bouton « Redémarrer maintenant » applique
+  tout de suite.
+- Linux .deb / .rpm : l'installation exige root, la mise à jour est seulement annoncée (`update-available`,
+  bouton « Installer »). L'AppImage (variable `APPIMAGE`) est mise à jour en silence.
 - Manifeste absent (404), plateforme absente, réseau coupé : log debug uniquement (les logs `error` du plugin
   sont coupés via `tauri_plugin_updater=off` dans le filtre par défaut, surchargeable par `RUST_LOG`).
-- Mode démo navigateur : `?update` simule une 0.2.0 disponible, `?update=error` un serveur injoignable.
+- Mode démo navigateur : `?update` simule une 0.2.0 disponible, `?update=ready` une 0.2.0 prête, `?update=error`
+  un serveur injoignable.
 
 ## Flux de dictée
 

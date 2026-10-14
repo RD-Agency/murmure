@@ -348,6 +348,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(&data_dir)?;
     log::info!("config : {} — données : {}", config_dir.display(), data_dir.display());
 
+    let relaunched_hidden = updater::take_relaunch_hidden(&config_dir);
     let settings = settings::load(&config_dir);
     let (tx, rx) = std::sync::mpsc::channel::<Command>();
     app.manage(AppState::new(config_dir, data_dir, settings.clone(), tx));
@@ -367,10 +368,10 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     preload_local_engine(&handle);
     // Modèle local absent : installation en arrière-plan (préchargement à la fin).
     install::ensure_installed(&handle);
-    // Mises à jour : vérification silencieuse (10 s puis toutes les 6 h, hors dictée et hors dev).
+    // Mises à jour silencieuses : vérification, téléchargement, redémarrage quand l'app est inactive.
     updater::spawn_background(&handle);
 
-    if std::env::args().any(|a| a == HIDDEN_ARG) && settings.onboarding_done {
+    if (relaunched_hidden || std::env::args().any(|a| a == HIDDEN_ARG)) && settings.onboarding_done {
         hide_main_window(&handle);
     }
     Ok(())
@@ -467,7 +468,12 @@ pub fn run() {
             // Clic sur l'icône du Dock / relance depuis le Finder.
             show_main_window(app);
         }
-        #[cfg(not(target_os = "macos"))]
+        // Windows : une mise à jour prête s'installe quand on quitte (sans relancer l'app).
+        #[cfg(windows)]
+        if let tauri::RunEvent::ExitRequested { .. } = event {
+            updater::apply_staged(app, false, false);
+        }
+        #[cfg(not(any(target_os = "macos", windows)))]
         let _ = (app, event);
     });
 }

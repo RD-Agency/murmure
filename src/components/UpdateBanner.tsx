@@ -12,13 +12,17 @@ function progressText(downloaded: number, total: number): string {
   return downloaded > 0 ? `${(downloaded / 1_048_576).toFixed(1).replace(".", ",")} Mo` : "Préparation…";
 }
 
-/** Bannière discrète en haut de l'accueil : « Murmure x.y.z est disponible · Installer ». */
+/**
+ * Bannière discrète en haut de l'accueil. Mise à jour prête (cas normal, tout est automatique) :
+ * « Murmure x.y.z est prête » + « Redémarrer maintenant ». Sinon : « disponible · Installer ».
+ */
 export function UpdateBanner() {
   const update = useApp((s) => s.update);
   const install = useApp((s) => s.installUpdate);
   const [dismissed, setDismissed] = useState<string | null>(null);
 
   const installing = update.status === "installing";
+  const ready = update.status === "ready";
   const info = update.available;
   if (!info && !installing) return null;
   if (!installing && info && dismissed === info.version) return null;
@@ -38,6 +42,12 @@ export function UpdateBanner() {
               <span className="font-medium">Installation de Murmure {info?.version ?? ""}</span>
               <span className="text-muted tabular-nums"> · {progressText(downloaded, total)}</span>
             </span>
+          ) : ready ? (
+            <span className="text-fg" title={info?.notes ?? undefined}>
+              <span className="font-medium">Murmure {info?.version} est prête</span>
+              <span className="text-muted"> · elle s'installera toute seule au prochain redémarrage</span>
+              {update.error && <span className="text-danger"> · {update.error}</span>}
+            </span>
           ) : (
             <span className="text-fg" title={info?.notes ?? undefined}>
               <span className="font-medium">Murmure {info?.version} est disponible</span>
@@ -48,7 +58,7 @@ export function UpdateBanner() {
         {!installing && info && (
           <>
             <Button size="sm" variant="primary" onClick={() => void install()}>
-              Installer
+              {ready ? "Redémarrer maintenant" : "Installer"}
             </Button>
             <IconButton label="Plus tard" onClick={() => setDismissed(info.version)}>
               <IconX size={13} />
@@ -100,6 +110,14 @@ export function UpdateRow() {
         </>
       );
       break;
+    case "ready":
+      description = (
+        <>
+          {current} · <span className="text-accent">Version {available?.version} prête, installée automatiquement au prochain redémarrage.</span>
+          {error && <span className="text-danger"> {error}</span>}
+        </>
+      );
+      break;
     case "installing":
       description = `${current} · Installation de la version ${available?.version ?? ""} — ${progressText(progress?.downloaded ?? 0, progress?.total ?? 0)}`;
       break;
@@ -128,7 +146,11 @@ export function UpdateRow() {
         )}
       </div>
       <div className="flex shrink-0 items-center gap-2">
-        {status === "available" ? (
+        {status === "ready" ? (
+          <Button size="sm" variant="primary" icon={<IconRefresh size={13} />} onClick={() => void install()}>
+            Redémarrer maintenant
+          </Button>
+        ) : status === "available" ? (
           <Button size="sm" variant="primary" icon={<IconDownload size={13} />} onClick={() => void install()}>
             Installer et redémarrer
           </Button>
