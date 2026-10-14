@@ -1,54 +1,171 @@
 name: Release
 
-# Pousser un tag vX.Y.Z construit les installeurs et crée une release brouillon.
+# Pousser un tag vX.Y.Z (ou lancer à la main) construit les installeurs de toutes
+# les plateformes et les attache à une release brouillon. On relit puis on publie.
+#
+# Signature macOS (optionnelle) : si le secret APPLE_CERTIFICATE existe, l'app est
+# signée Developer ID puis notarisée (secrets APPLE_*). Sinon signature ad hoc :
+# l'app tourne, mais macOS demande un clic droit > Ouvrir au premier lancement.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag de la release (ex. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  # Défini → ggml désactive -march=native : binaire portable (base AVX2/FMA/F16C en x86).
+  SOURCE_DATE_EPOCH: "1700000000"
 
 jobs:
+  draft:
+    name: Release brouillon
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Créer la release si absente
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --draft --title "Murmure $TAG" --target "$GITHUB_SHA" \
+              --notes-file .github/release-notes.md
+
   build:
+    needs: draft
+    name: ${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
-            args: --target aarch64-apple-darwin
-          - os: macos-13
-            args: --target x86_64-apple-darwin
-          - os: ubuntu-22.04
-            args: ""
-          - os: windows-latest
-            args: ""
+          - name: macOS Apple Silicon
+            os: macos-latest
+            target: aarch64-apple-darwin
+            suffix: macos-arm64
+            features: ""
+          - name: macOS Intel
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            suffix: macos-x64
+            features: ""
+          - name: Linux
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            suffix: linux-x64
+            features: ""
+          - name: Linux NVIDIA (CUDA)
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            suffix: linux-x64-cuda
+            features: cuda
+          - name: Windows
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            suffix: windows-x64
+            features: ""
     runs-on: ${{ matrix.os }}
-    permissions:
-      contents: write
+    env:
+      HAS_APPLE: ${{ secrets.APPLE_CERTIFICATE != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+
       - name: Dépendances système (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
-            libasound2-dev libxdo-dev libssl-dev cmake clang
+            libasound2-dev libxdo-dev libssl-dev cmake clang rpm
+
+      - name: CUDA toolkit
+        if: matrix.features == 'cuda'
+        uses: Jimver/cuda-toolkit@v0.2.24
+        with:
+          cuda: "12.6.3"
+          method: network
+          sub-packages: '["nvcc", "cudart", "cudart-dev", "cccl"]'
+          non-cuda-sub-packages: '["libcublas", "libcublas-dev"]'
+
       - uses: pnpm/action-setup@v4
         with:
           version: 11
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          key: ${{ matrix.suffix }}
+
       - run: pnpm install --frozen-lockfile
-      - uses: tauri-apps/tauri-action@v0
+
+      - name: Version depuis le tag
+        shell: bash
+        run: |
+          V="${TAG#v}"
+          node -e "const f='src-tauri/tauri.conf.json',c=require('./'+f);c.version='$V';require('fs').writeFileSync(f,JSON.stringify(c,null,2))"
+
+      - name: Clé Apple de notarisation
+        if: runner.os == 'macOS' && env.HAS_APPLE == 'true'
+        run: echo "${{ secrets.APPLE_API_KEY_P8 }}" | base64 --decode > "$RUNNER_TEMP/apple_api_key.p8"
+
+      - name: Build
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: Murmure ${{ github.ref_name }}
-          releaseDraft: true
-          args: ${{ matrix.args }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
+          # Architectures CUDA visées : Turing → Ada (RTX 20 à 40), plus PTX pour les plus récentes.
+          CMAKE_CUDA_ARCHITECTURES: "75-real;86-real;89-real;89-virtual"
+        run: |
+          if [ -n "$APPLE_API_KEY" ] && [ -f "$RUNNER_TEMP/apple_api_key.p8" ]; then
+            export APPLE_API_KEY_PATH="$RUNNER_TEMP/apple_api_key.p8"
+          fi
+          # Sans certificat, Tauri échouerait sur des variables vides : on les retire.
+          [ -z "$APPLE_CERTIFICATE" ] && unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_ISSUER APPLE_API_KEY
+          ARGS=(--target "${{ matrix.target }}")
+          [ -n "${{ matrix.features }}" ] && ARGS+=(--features "${{ matrix.features }}")
+          pnpm tauri build "${ARGS[@]}"
+
+      - name: Renommer et publier les installeurs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${TAG#v}"
+          B="src-tauri/target/${{ matrix.target }}/release/bundle"
+          mkdir -p out
+          shopt -s nullglob
+          for f in "$B"/dmg/*.dmg;           do cp "$f" "out/Murmure-$V-${{ matrix.suffix }}.dmg"; done
+          for f in "$B"/deb/*.deb;           do cp "$f" "out/Murmure-$V-${{ matrix.suffix }}.deb"; done
+          for f in "$B"/rpm/*.rpm;           do cp "$f" "out/Murmure-$V-${{ matrix.suffix }}.rpm"; done
+          for f in "$B"/appimage/*.AppImage; do cp "$f" "out/Murmure-$V-${{ matrix.suffix }}.AppImage"; done
+          for f in "$B"/msi/*.msi;           do cp "$f" "out/Murmure-$V-${{ matrix.suffix }}.msi"; done
+          for f in "$B"/nsis/*-setup.exe;    do cp "$f" "out/Murmure-$V-${{ matrix.suffix }}-setup.exe"; done
+          ls -lh out
+          test -n "$(ls out)"
+          gh release upload "$TAG" out/* --clobber
+
+  checksums:
+    needs: build
+    name: Sommes de contrôle
+    runs-on: ubuntu-latest
+    steps:
+      - name: SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D dl --pattern 'Murmure-*'
+          (cd dl && sha256sum Murmure-* > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" dl/SHA256SUMS.txt --clobber
