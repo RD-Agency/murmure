@@ -1,0 +1,36 @@
+# Reverse proxy HTTPS pour Murmure STT.
+# Certificat Let's Encrypt automatique : le nom DNS doit pointer vers ce serveur, ports 80/443 ouverts.
+# Variables : MURMURE_DOMAIN (ex. stt.exemple.fr), ACME_EMAIL.
+
+{
+	email {$ACME_EMAIL}
+	# Les journaux d'accès sont désactivés par défaut. Si vous les activez (directive `log`),
+	# Caddy masque l'en-tête Authorization (option globale log_credentials désactivée par défaut).
+}
+
+{$MURMURE_DOMAIN} {
+	# Optionnel : restreindre aux IP du cabinet / du VPN.
+	# @externe not remote_ip 203.0.113.10/32 10.8.0.0/24
+	# respond @externe 403
+
+	# Un peu au-dessus de MURMURE_MAX_UPLOAD_MB (enveloppe multipart).
+	request_body {
+		max_size 30MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	# `stt` : alias réseau du service stt-gpu ou stt-cpu (docker-compose.yml).
+	# Caddy installé hors Docker : remplacer par 127.0.0.1:8000.
+	reverse_proxy stt:8000 {
+		transport http {
+			read_timeout 300s
+			write_timeout 300s
+		}
+	}
+}

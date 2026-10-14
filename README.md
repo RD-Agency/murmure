@@ -1,8 +1,65 @@
 # Murmure
 
-Dictée vocale pour macOS, Linux et Windows (Tauri v2 + React). Voir `ARCHITECTURE.md`.
+Dictée vocale façon Wispr Flow, pour macOS, Linux et Windows. On maintient un raccourci, on parle,
+on relâche : le texte arrive là où se trouve le curseur, dans n'importe quelle application.
 
-- `pnpm tauri dev` : application complète.
-- `pnpm dev` : front seul dans un navigateur (http://localhost:1420), en **mode démo** (données factices).
-  - `?reset` réinitialise les données de démo (relance l'onboarding).
-  - `overlay.html?demo=recording|handsfree|transcribing|error` prévisualise la pastille.
+Deux moteurs au choix :
+
+- **Sur cet appareil** : Whisper large-v3-turbo via whisper.cpp. Hors ligne, rien ne sort de la machine.
+  Accélération Metal sur Mac, CUDA ou Vulkan en option ailleurs.
+- **Serveur** : n'importe quel endpoint compatible OpenAI (`/v1/audio/transcriptions`) avec une clé API :
+  notre serveur auto-hébergé (`server/`), OpenAI ou Groq.
+
+## Utilisation
+
+| Geste | Effet |
+|---|---|
+| Maintenir **⌥ Espace** (Mac) / **Ctrl+Alt+Espace** (Linux, Windows) | Push-to-talk : on parle, on relâche, c'est collé |
+| Appui bref | Mains libres ; un second appui arrête |
+| **Échap** pendant l'enregistrement | Annule |
+
+Le raccourci, le mode (hybride, maintien, bascule), la langue, le vocabulaire, le micro et le collage se règlent dans l'app.
+La clé API est rangée dans le trousseau du système, jamais dans un fichier.
+
+## Développement
+
+Prérequis : Rust stable, Node 22+, pnpm, CMake. Linux : `libwebkit2gtk-4.1-dev libasound2-dev libxdo-dev clang`.
+
+```bash
+pnpm install
+pnpm tauri dev          # application complète
+pnpm dev                # front seul dans le navigateur, en mode démo (données factices)
+pnpm tauri build        # installeurs (.dmg, .deb/.rpm/AppImage, .msi)
+pnpm tauri build -- --features cuda   # Linux/Windows avec GPU NVIDIA
+```
+
+Tests :
+
+```bash
+cd src-tauri && cargo test --lib
+# Moteur local sur un vrai modèle (voir ~/.whisper/models ou le dossier de modèles de l'app) :
+MURMURE_TEST_WAV=t.wav cargo test --release --lib engine::local -- --ignored --nocapture
+# Client distant contre un serveur réel :
+MURMURE_E2E_URL=http://127.0.0.1:8000 MURMURE_E2E_KEY=mrm_… MURMURE_TEST_WAV=t.wav \
+  cargo test --lib engine::remote -- --ignored --nocapture
+cd server && uv run pytest
+```
+
+Mode démo du front : `?reset` relance l'onboarding, `?theme=light`, `?platform=linux`,
+`overlay.html?demo=recording|handsfree|transcribing|error|cycle` pour la pastille.
+
+Release : pousser un tag `vX.Y.Z` construit les installeurs (GitHub Actions) dans une release brouillon.
+
+## Permissions
+
+- **macOS** : Micro, et Accessibilité pour coller dans les autres apps. L'onboarding ouvre les bons panneaux.
+- **Linux X11** : rien de spécial (`xdotool` conseillé).
+- **Linux Wayland** : le collage passe par `wtype` ou `ydotool`. Le raccourci global n'est pas capté sous Wayland :
+  liez un raccourci du bureau (KDE : Réglages › Raccourcis) à la commande `murmure --toggle`.
+
+## Serveur
+
+Voir [`server/README.md`](server/README.md) : FastAPI + faster-whisper large-v3-turbo, Docker GPU/CPU, Caddy en HTTPS,
+clés `mrm_…` générées par `murmure-server gen-key`.
+
+Architecture et contrat interne : [`ARCHITECTURE.md`](ARCHITECTURE.md).

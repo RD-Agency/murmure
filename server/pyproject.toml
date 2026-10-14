@@ -1,0 +1,45 @@
+[project]
+name = "murmure-server"
+version = "0.1.0"
+description = "Serveur de transcription auto-hébergé pour Murmure (API compatible OpenAI, moteur faster-whisper)"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "Proprietary" }
+authors = [{ name = "RD Agency" }]
+dependencies = [
+    # Moteur : versions épinglées (compatibilité CUDA 12.8 / cuDNN 9 vérifiée pour ctranslate2 4.8.x).
+    "faster-whisper==1.2.1",
+    "ctranslate2==4.8.2",
+    # PyAV 19 a supprimé l'argument `metadata_errors` utilisé par faster-whisper 1.2.1 : décodage cassé.
+    "av>=12,<19",
+    # API
+    "fastapi>=0.142,<0.143",
+    "uvicorn[standard]>=0.54,<0.55",
+    "python-multipart>=0.0.32,<0.1",
+    "pydantic-settings>=2.15,<3",
+]
+
+[project.scripts]
+murmure-server = "murmure_server.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1,<10",
+    "httpx>=0.28,<0.29",
+    "openai>=3.22,<4",
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/murmure_server"]
+
+[tool.uv]
+# Résolution reproductible : on ignore les versions publiées après cette date.
+exclude-newer = "2026-10-01T00:00:00Z"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

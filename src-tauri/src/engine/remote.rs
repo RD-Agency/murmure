@@ -186,4 +186,26 @@ mod tests {
         let err = e.test().await.unwrap_err().to_string();
         assert!(err.contains("Connexion impossible") || err.contains("réseau"), "{err}");
     }
+
+    /// Bout en bout contre un serveur réel (ex. `server/` lancé en local) :
+    /// MURMURE_E2E_URL=http://127.0.0.1:8000 MURMURE_E2E_KEY=mrm_… MURMURE_TEST_WAV=t.wav \
+    ///   cargo test --lib engine::remote -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn bout_en_bout_serveur() {
+        let url = std::env::var("MURMURE_E2E_URL").expect("MURMURE_E2E_URL");
+        let key = std::env::var("MURMURE_E2E_KEY").ok();
+        let wav = std::env::var("MURMURE_TEST_WAV").expect("MURMURE_TEST_WAV");
+        let mut reader = hound::WavReader::open(wav).expect("wav");
+        let samples: Vec<f32> = reader.samples::<i16>().map(|s| s.unwrap() as f32 / 32768.0).collect();
+        let e = RemoteEngine { endpoint: url, api_key: key, model: "whisper-large-v3-turbo".into() };
+        println!("test : {}", e.test().await.expect("test"));
+        let opts = TranscribeOptions { language: Some("fr".into()), initial_prompt: None };
+        let t0 = std::time::Instant::now();
+        let text = e.transcribe(&samples, &opts).await.expect("transcribe");
+        println!("texte : {text} ({} ms)", t0.elapsed().as_millis());
+        assert!(text.to_lowercase().contains("dictée"));
+        let bad = RemoteEngine { api_key: Some("mrm_mauvaise_cle_0000000000".into()), ..e };
+        println!("mauvaise clé : {}", bad.test().await.unwrap_err());
+    }
 }

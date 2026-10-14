@@ -1,0 +1,70 @@
+# Murmure STT — lancement :
+#   GPU : docker compose --profile gpu up -d
+#   CPU : docker compose --profile cpu up -d
+#   + HTTPS (Caddy) : ajouter --profile proxy (MURMURE_DOMAIN et ACME_EMAIL dans .env)
+
+x-stt: &stt
+  env_file: .env
+  restart: unless-stopped
+  volumes:
+    - models:/models
+  # Le port n'est publié que sur la boucle locale : l'accès externe passe par Caddy (TLS).
+  ports:
+    - "127.0.0.1:${MURMURE_HOST_PORT:-8000}:8000"
+  networks:
+    default:
+      aliases: [stt]
+  # Durcissement : système de fichiers en lecture seule, aucun privilège.
+  read_only: true
+  tmpfs:
+    - /tmp:size=256m
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+    interval: 30s
+    timeout: 5s
+    retries: 3
+    start_period: 600s
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "5" }
+
+services:
+  stt-gpu:
+    <<: *stt
+    profiles: [gpu]
+    build: { context: ., dockerfile: Dockerfile }
+    image: murmure-stt:gpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  stt-cpu:
+    <<: *stt
+    profiles: [cpu]
+    build: { context: ., dockerfile: Dockerfile.cpu }
+    image: murmure-stt:cpu
+
+  caddy:
+    profiles: [proxy]
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  models:
+  caddy-data:
+  caddy-config:
