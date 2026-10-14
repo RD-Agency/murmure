@@ -1,27 +1,39 @@
 name: Release
 
-# Pousser un tag vX.Y.Z (ou lancer à la main) construit les installeurs de toutes
-# les plateformes et les attache à une release brouillon. On relit puis on publie.
+# Pousser un tag vX.Y.Z (ou lancer à la main) :
+#   1. construit les installeurs de toutes les plateformes ;
+#   2. les publie sur S3 (lien public) et dans une release GitHub brouillon ;
+#   3. met à jour la page de téléchargement, les liens « latest » et le manifeste
+#      de mise à jour automatique (latest.json).
 #
-# Signature macOS (optionnelle) : si le secret APPLE_CERTIFICATE existe, l'app est
-# signée Developer ID puis notarisée (secrets APPLE_*). Sinon signature ad hoc :
-# l'app tourne, mais macOS demande un clic droit > Ouvrir au premier lancement.
+# Lien public : https://crgenerator.s3.eu-west-par.io.cloud.ovh.net/murmure/index.html
+#
+# macOS : signé Developer ID et notarisé si les secrets APPLE_* existent, sinon signature ad hoc.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag de la release (ex. v0.1.0)"
+        description: "Version à publier (ex. v0.1.0)"
         required: true
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 env:
   TAG: ${{ github.event.inputs.tag || github.ref_name }}
   # Défini → ggml désactive -march=native : binaire portable (base AVX2/FMA/F16C en x86).
   SOURCE_DATE_EPOCH: "1700000000"
+  S3_ENDPOINT: https://s3.eu-west-par.io.cloud.ovh.net
+  S3_REGION: eu-west-par
+  S3_BUCKET: crgenerator
+  S3_PREFIX: murmure
+  PUBLIC_BASE: https://crgenerator.s3.eu-west-par.io.cloud.ovh.net/murmure
 
 jobs:
   draft:
@@ -29,7 +41,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Créer la release si absente
+      - name: Créer la release GitHub si absente
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -72,6 +84,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       HAS_APPLE: ${{ secrets.APPLE_CERTIFICATE != '' }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.OVH_S3_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.OVH_S3_SECRET_KEY }}
     steps:
       - uses: actions/checkout@v5
 
@@ -126,46 +140,102 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
-          # Architectures CUDA visées : Turing → Ada (RTX 20 à 40), plus PTX pour les plus récentes.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Architectures CUDA : Turing → Ada (RTX 20 à 40), plus PTX pour les plus récentes.
           CMAKE_CUDA_ARCHITECTURES: "75-real;86-real;89-real;89-virtual"
         run: |
           if [ -n "$APPLE_API_KEY" ] && [ -f "$RUNNER_TEMP/apple_api_key.p8" ]; then
             export APPLE_API_KEY_PATH="$RUNNER_TEMP/apple_api_key.p8"
           fi
           # Sans certificat, Tauri échouerait sur des variables vides : on les retire.
-          [ -z "$APPLE_CERTIFICATE" ] && unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_ISSUER APPLE_API_KEY
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_ISSUER APPLE_API_KEY
+          fi
           ARGS=(--target "${{ matrix.target }}")
           [ -n "${{ matrix.features }}" ] && ARGS+=(--features "${{ matrix.features }}")
           pnpm tauri build "${ARGS[@]}"
 
-      - name: Renommer et publier les installeurs
+      - name: Rassembler les installeurs
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          V="${TAG#v}"
+          V="${TAG#v}"; S="${{ matrix.suffix }}"
           B="src-tauri/target/${{ matrix.target }}/release/bundle"
           mkdir -p out
           shopt -s nullglob
-          for f in "$B"/dmg/*.dmg;           do cp "$f" "out/Murmure-$V-${{ matrix.suffix }}.dmg"; done
-          for f in "$B"/deb/*.deb;           do cp "$f" "out/Murmure-$V-${{ matrix.suffix }}.deb"; done
-          for f in "$B"/rpm/*.rpm;           do cp "$f" "out/Murmure-$V-${{ matrix.suffix }}.rpm"; done
-          for f in "$B"/appimage/*.AppImage; do cp "$f" "out/Murmure-$V-${{ matrix.suffix }}.AppImage"; done
-          for f in "$B"/msi/*.msi;           do cp "$f" "out/Murmure-$V-${{ matrix.suffix }}.msi"; done
-          for f in "$B"/nsis/*-setup.exe;    do cp "$f" "out/Murmure-$V-${{ matrix.suffix }}-setup.exe"; done
+          cp_one() { cp "$1" "out/$2"; [ -f "$1.sig" ] && cp "$1.sig" "out/$2.sig"; true; }
+          for f in "$B"/dmg/*.dmg;               do cp_one "$f" "Murmure-$V-$S.dmg"; done
+          for f in "$B"/macos/*.app.tar.gz;      do cp_one "$f" "Murmure-$V-$S.app.tar.gz"; done
+          for f in "$B"/deb/*.deb;               do cp_one "$f" "Murmure-$V-$S.deb"; done
+          for f in "$B"/rpm/*.rpm;               do cp_one "$f" "Murmure-$V-$S.rpm"; done
+          for f in "$B"/appimage/*.AppImage;     do cp_one "$f" "Murmure-$V-$S.AppImage"; done
+          for f in "$B"/msi/*.msi;               do cp_one "$f" "Murmure-$V-$S.msi"; done
+          for f in "$B"/nsis/*-setup.exe;        do cp_one "$f" "Murmure-$V-$S-setup.exe"; done
           ls -lh out
           test -n "$(ls out)"
-          gh release upload "$TAG" out/* --clobber
 
-  checksums:
-    needs: build
-    name: Sommes de contrôle
-    runs-on: ubuntu-latest
-    steps:
-      - name: SHA256SUMS
+      - name: Publier sur S3
+        shell: bash
+        run: |
+          for f in out/*; do
+            aws s3 cp "$f" "s3://$S3_BUCKET/$S3_PREFIX/releases/$TAG/$(basename "$f")" \
+              --endpoint-url "$S3_ENDPOINT" --region "$S3_REGION" --acl public-read --only-show-errors
+          done
+
+      - name: Publier sur la release GitHub
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" out/* --clobber
+
+  publish:
+    needs: build
+    # Publie même si une variante a échoué : les autres plateformes restent disponibles.
+    if: ${{ !cancelled() }}
+    name: Page de téléchargement et mise à jour auto
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.OVH_S3_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.OVH_S3_SECRET_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Récupérer les fichiers publiés
         run: |
-          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D dl --pattern 'Murmure-*'
-          (cd dl && sha256sum Murmure-* > SHA256SUMS.txt && cat SHA256SUMS.txt)
-          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" dl/SHA256SUMS.txt --clobber
+          aws s3 cp "s3://$S3_BUCKET/$S3_PREFIX/releases/$TAG/" dl/ --recursive \
+            --endpoint-url "$S3_ENDPOINT" --region "$S3_REGION" --only-show-errors
+          ls -lh dl
+
+      - name: Sommes de contrôle, latest.json, page
+        run: |
+          (cd dl && sha256sum $(ls | grep -v '\.sig$' | grep -v SHA256SUMS) > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          python3 .github/scripts/publish.py --dir dl --tag "$TAG" --base "$PUBLIC_BASE" --out site
+          ls -l site site/latest
+
+      - name: Envoyer sur S3
+        run: |
+          s3() { aws s3 cp "$@" --endpoint-url "$S3_ENDPOINT" --region "$S3_REGION" --acl public-read --only-show-errors; }
+          s3 dl/SHA256SUMS.txt "s3://$S3_BUCKET/$S3_PREFIX/releases/$TAG/SHA256SUMS.txt"
+          # Liens stables sans numéro de version (copie côté serveur).
+          while read -r src dst; do
+            aws s3 cp "s3://$S3_BUCKET/$S3_PREFIX/releases/$TAG/$src" "s3://$S3_BUCKET/$S3_PREFIX/latest/$dst" \
+              --endpoint-url "$S3_ENDPOINT" --region "$S3_REGION" --acl public-read --only-show-errors
+          done < site/latest-map.txt
+          s3 site/latest.json "s3://$S3_BUCKET/$S3_PREFIX/latest.json" --cache-control "no-cache" --content-type application/json
+          s3 site/index.html  "s3://$S3_BUCKET/$S3_PREFIX/index.html"  --cache-control "no-cache" --content-type "text/html; charset=utf-8"
+          s3 site/icon.png    "s3://$S3_BUCKET/$S3_PREFIX/icon.png"
+
+      - name: SHA256SUMS sur la release GitHub
+        run: gh release upload "$TAG" dl/SHA256SUMS.txt --clobber
+
+      - name: Résumé
+        run: |
+          {
+            echo "### Murmure $TAG publié"
+            echo
+            echo "- Page de téléchargement : $PUBLIC_BASE/index.html"
+            echo "- Manifeste de mise à jour : $PUBLIC_BASE/latest.json"
+            echo
+            sed 's/^/    /' site/latest-map.txt
+          } >> "$GITHUB_STEP_SUMMARY"

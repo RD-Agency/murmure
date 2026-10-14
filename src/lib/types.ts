@@ -68,12 +68,31 @@ export interface DictationStatePayload {
   hands_free?: boolean;
 }
 
+/** Téléchargement en cours (commande `get_downloads`). */
+export interface DownloadStatus {
+  id: string;
+  downloaded: number;
+  total: number;
+}
+
 export interface DownloadProgress {
   id: string;
   downloaded: number;
   total: number;
   done: boolean;
   error?: string;
+}
+
+/** Mise à jour disponible (événement `update-available`, retour de `check_update`). */
+export interface UpdateInfo {
+  version: string;
+  notes: string | null;
+}
+
+/** Progression du téléchargement de la mise à jour (octets cumulés ; total = 0 si inconnu). */
+export interface UpdateProgress {
+  downloaded: number;
+  total: number;
 }
 
 /** Événements Rust → front et leur payload. */
@@ -84,6 +103,8 @@ export interface EventMap {
   "model-download-progress": DownloadProgress;
   "settings-changed": Settings;
   navigate: View;
+  "update-available": UpdateInfo;
+  "update-progress": UpdateProgress;
 }
 
 export type EventName = keyof EventMap;
@@ -99,6 +120,7 @@ export interface CommandMap {
   list_models: { args: undefined; ret: ModelInfo[] };
   download_model: { args: { id: string }; ret: void };
   cancel_download: { args: { id: string }; ret: void };
+  get_downloads: { args: undefined; ret: DownloadStatus[] };
   delete_model: { args: { id: string }; ret: void };
   start_dictation: { args: undefined; ret: void };
   stop_dictation: { args: undefined; ret: void };
@@ -112,6 +134,8 @@ export interface CommandMap {
   request_microphone: { args: undefined; ret: Permissions };
   open_permission_settings: { args: { kind: PermissionKind }; ret: void };
   get_platform: { args: undefined; ret: Platform };
+  check_update: { args: undefined; ret: UpdateInfo | null };
+  install_update: { args: undefined; ret: void };
 }
 
 export type CommandName = keyof CommandMap;

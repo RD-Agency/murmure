@@ -16,7 +16,7 @@ import { PermissionsPanel } from "../components/PermissionsPanel";
 import { Progress } from "../components/Progress";
 import { RemoteForm } from "../components/RemoteForm";
 import { on } from "../lib/api";
-import { formatBytes, formatSize, hotkeyLabel } from "../lib/format";
+import { downloadPercent, formatProgressSize, formatSize, hotkeyLabel } from "../lib/format";
 import type { DictationState, EngineKind, Platform } from "../lib/types";
 import { useApp } from "../store";
 
@@ -252,32 +252,49 @@ function LocalSetup() {
   const download = useApp((s) => s.downloadModel);
   const cancel = useApp((s) => s.cancelDownload);
 
-  // Un modèle déjà présent est réutilisé ; sinon on propose le recommandé.
+  // Un modèle déjà présent est réutilisé ; sinon on suit le téléchargement déjà lancé par Rust
+  // au démarrage, à défaut le modèle choisi, puis le recommandé.
   const present = models.find((m) => m.downloaded && m.id === settings.local_model) ?? models.find((m) => m.downloaded);
   const [initiallyPresent] = useState(() => !!present);
-  const target = present ?? models.find((m) => m.recommended) ?? models.find((m) => m.id === settings.local_model) ?? models[0];
+  const running = models.find((m) => downloads[m.id] && !downloads[m.id].done);
+  const target =
+    present ??
+    running ??
+    models.find((m) => m.id === settings.local_model) ??
+    models.find((m) => m.recommended) ??
+    models[0];
 
   useEffect(() => {
     if (present && present.id !== settings.local_model) update({ local_model: present.id });
   }, [present, settings.local_model, update]);
 
+  const progress = target ? downloads[target.id] : undefined;
+  const error = target ? errors[target.id] : undefined;
+
+  // Arrivée sur l'étape : on démarre l'installation sans attendre de clic (une seule fois ;
+  // si Rust l'a déjà lancée, l'appel la rejoint). Après une erreur ou une annulation : bouton.
+  const autoStarted = useRef(false);
+  useEffect(() => {
+    if (!target || target.downloaded || progress || error || autoStarted.current) return;
+    autoStarted.current = true;
+    void download(target.id);
+  }, [target, progress, error, download]);
+
   if (!target) {
     return <StepFrame title="Modèle de transcription" text="Chargement du catalogue…" />;
   }
 
-  const progress = downloads[target.id];
-  const ratio = progress && progress.total ? progress.downloaded / progress.total : 0;
-  const error = errors[target.id];
+  const percent = progress ? downloadPercent(progress.downloaded, progress.total) : 0;
 
   return (
     <StepFrame
-      title={present ? "Modèle prêt" : "Télécharger le modèle"}
+      title={present ? "Modèle prêt" : "Installation du modèle"}
       text={
         present
           ? initiallyPresent
             ? "Un modèle est déjà présent sur cet appareil. Rien à télécharger."
-            : "Téléchargement terminé. Tout fonctionne désormais hors ligne."
-          : "Un seul téléchargement, ensuite tout fonctionne hors ligne."
+            : "Installation terminée. Tout fonctionne désormais hors ligne."
+          : "Murmure installe son modèle de transcription. Un seul téléchargement, ensuite tout fonctionne hors ligne."
       }
     >
       <div className="rounded-[14px] border border-line bg-surface p-5 shadow-soft">
@@ -304,18 +321,16 @@ function LocalSetup() {
               </Button>
             ) : (
               <Button variant="primary" onClick={() => download(target.id)} icon={<IconDownload size={14} />}>
-                Télécharger
+                {error ? "Réessayer" : "Télécharger"}
               </Button>
             ))}
         </div>
         {progress && !target.downloaded && (
           <div className="mt-5 animate-fade-in">
-            <Progress value={ratio} label="Progression du téléchargement" />
+            <Progress value={percent / 100} label="Progression de l'installation" />
             <div className="mt-2 flex justify-between text-[12px] text-muted tabular-nums">
-              <span>{Math.round(ratio * 100)} %</span>
-              <span>
-                {formatBytes(progress.downloaded)} sur {formatBytes(progress.total)}
-              </span>
+              <span>{percent} %</span>
+              <span>{formatProgressSize(progress.downloaded, progress.total)}</span>
             </div>
           </div>
         )}

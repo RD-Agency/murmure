@@ -1,8 +1,28 @@
 import { create } from "zustand";
 import { api, errorMessage, on } from "./lib/api";
-import type { DownloadProgress, HistoryEntry, ModelInfo, Platform, Settings, View } from "./lib/types";
+import type {
+  DownloadProgress,
+  DownloadStatus,
+  HistoryEntry,
+  ModelInfo,
+  Platform,
+  Settings,
+  UpdateInfo,
+  UpdateProgress,
+  View,
+} from "./lib/types";
 
 export type SaveStatus = "idle" | "saving" | "saved" | "error";
+
+/** idle : rien vérifié · checking · uptodate · available · installing · error */
+export type UpdateStatus = "idle" | "checking" | "uptodate" | "available" | "installing" | "error";
+
+export interface UpdateSlice {
+  status: UpdateStatus;
+  available: UpdateInfo | null;
+  progress: UpdateProgress | null;
+  error: string | null;
+}
 
 interface AppState {
   ready: boolean;
@@ -16,6 +36,7 @@ interface AppState {
   downloadErrors: Record<string, string>;
   history: HistoryEntry[];
   hasApiKey: boolean;
+  update: UpdateSlice;
 
   init: () => Promise<void>;
   setView: (v: View) => void;
@@ -30,6 +51,8 @@ interface AppState {
   deleteModel: (id: string) => Promise<void>;
   deleteHistoryEntry: (id: string) => Promise<void>;
   clearHistory: () => Promise<void>;
+  checkUpdate: () => Promise<void>;
+  installUpdate: () => Promise<void>;
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -49,6 +72,7 @@ export const useApp = create<AppState>((set, get) => ({
   downloadErrors: {},
   history: [],
   hasApiKey: false,
+  update: { status: "idle", available: null, progress: null, error: null },
 
   init: async () => {
     if (initialized) return;
@@ -59,6 +83,17 @@ export const useApp = create<AppState>((set, get) => ({
       if (!pendingLocal) set({ settings: s });
     });
     on("navigate", (v) => set({ view: v }));
+    on("update-available", (info) =>
+      set((st) =>
+        st.update.status === "installing"
+          ? { update: { ...st.update, available: info } }
+          : { update: { status: "available", available: info, progress: null, error: null } },
+      ),
+    );
+    on("update-progress", (progress) =>
+      // Aussi déclenché depuis le tray : on passe en « installing » à la première progression.
+      set((st) => ({ update: { ...st.update, status: "installing", progress, error: null } })),
+    );
     on("dictation-result", (entry) => {
       if (get().settings?.history_enabled === false) return;
       set((st) => ({ history: [entry, ...st.history.filter((h) => h.id !== entry.id)] }));
@@ -88,15 +123,24 @@ export const useApp = create<AppState>((set, get) => ({
       }
     });
 
-    const [platform, settings, models, history, hasApiKey] = await Promise.all([
+    const [platform, settings, models, history, hasApiKey, running] = await Promise.all([
       api.getPlatform().catch(() => "macos" as Platform),
       api.getSettings(),
       api.listModels().catch(() => [] as ModelInfo[]),
       api.getHistory().catch(() => [] as HistoryEntry[]),
       api.hasApiKey().catch(() => false),
+      // Téléchargements déjà lancés par Rust (auto-installation au démarrage).
+      api.getDownloads().catch(() => [] as DownloadStatus[]),
     ]);
     document.documentElement.dataset.platform = platform;
-    set({ platform, settings, models, history, hasApiKey, ready: true });
+    set((st) => {
+      const downloads = { ...st.downloads };
+      for (const d of running) {
+        // Un événement de progression a pu arriver pendant l'init : on garde le plus avancé.
+        if (!downloads[d.id] || downloads[d.id].downloaded < d.downloaded) downloads[d.id] = { ...d, done: false };
+      }
+      return { platform, settings, models, history, hasApiKey, downloads, ready: true };
+    });
   },
 
   setView: (view) => set({ view }),
@@ -159,7 +203,9 @@ export const useApp = create<AppState>((set, get) => ({
     set((st) => {
       const downloadErrors = { ...st.downloadErrors };
       delete downloadErrors[id];
-      return { downloads: { ...st.downloads, [id]: { id, downloaded: 0, total, done: false } }, downloadErrors };
+      // Téléchargement déjà en cours (auto-installation) : on le rejoint sans remettre la jauge à zéro.
+      const current = st.downloads[id] ?? { id, downloaded: 0, total, done: false };
+      return { downloads: { ...st.downloads, [id]: current }, downloadErrors };
     });
     try {
       // Rust peut ne rendre la main qu'à la fin du téléchargement : la progression arrive par événement.
@@ -206,5 +252,29 @@ export const useApp = create<AppState>((set, get) => ({
   clearHistory: async () => {
     set({ history: [] });
     await api.clearHistory().catch(() => get().refreshHistory());
+  },
+
+  checkUpdate: async () => {
+    if (get().update.status === "installing") return;
+    set((st) => ({ update: { ...st.update, status: "checking", error: null } }));
+    try {
+      const info = await api.checkUpdate();
+      set({ update: { status: info ? "available" : "uptodate", available: info, progress: null, error: null } });
+    } catch (e) {
+      set((st) => ({ update: { ...st.update, status: "error", error: errorMessage(e) } }));
+    }
+  },
+
+  installUpdate: async () => {
+    if (get().update.status === "installing") return;
+    set((st) => ({ update: { ...st.update, status: "installing", progress: null, error: null } }));
+    try {
+      // En cas de succès, Rust relance l'app : cette promesse ne se résout normalement pas.
+      await api.installUpdate();
+    } catch (e) {
+      set((st) => ({
+        update: { ...st.update, status: st.update.available ? "available" : "error", progress: null, error: errorMessage(e) },
+      }));
+    }
   },
 }));

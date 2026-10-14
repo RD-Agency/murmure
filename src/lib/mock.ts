@@ -6,6 +6,7 @@ import type {
   AudioDevice,
   CommandMap,
   CommandName,
+  DownloadStatus,
   EventMap,
   EventName,
   HistoryEntry,
@@ -219,35 +220,58 @@ function models(): ModelInfo[] {
   });
 }
 
-const downloads = new Map<string, { cancelled: boolean }>();
+// Registre des téléchargements, comme `state.rs` : un seul par modèle, progression consultable.
+const downloads = new Map<string, { cancelled: boolean; downloaded: number; total: number }>();
 
-async function simulateDownload(id: string) {
+const RECOMMENDED_ID = CATALOG.find((m) => m.recommended)?.id ?? "large-v3-turbo-q5_0";
+const resolveId = (id: string) => (CATALOG.some((m) => m.id === id) ? id : RECOMMENDED_ID);
+
+function simulateDownload(id: string) {
   const model = CATALOG.find((m) => m.id === id);
   if (!model) throw "Modèle inconnu";
+  // Déjà en cours (ex. auto-installation) : on le rejoint.
   if (downloads.has(id)) return;
-  const token = { cancelled: false };
-  downloads.set(id, token);
   const total = model.size_mb * 1024 * 1024;
-  let downloaded = 0;
+  const token = { cancelled: false, downloaded: 0, total };
+  downloads.set(id, token);
   const durationMs = 5000 + model.size_mb * 2;
   const stepMs = 120;
   (async () => {
-    while (downloaded < total) {
+    while (token.downloaded < total) {
       await sleep(stepMs);
       if (token.cancelled) {
         downloads.delete(id);
-        mockEmit("model-download-progress", { id, downloaded, total, done: true, error: "Téléchargement annulé" });
+        mockEmit("model-download-progress", { id, downloaded: token.downloaded, total, done: true, error: "Téléchargement annulé" });
         return;
       }
       const jitter = 0.6 + Math.random() * 0.8;
-      downloaded = Math.min(total, downloaded + (total / (durationMs / stepMs)) * jitter);
-      mockEmit("model-download-progress", { id, downloaded: Math.round(downloaded), total, done: false });
+      token.downloaded = Math.round(Math.min(total, token.downloaded + (total / (durationMs / stepMs)) * jitter));
+      mockEmit("model-download-progress", { id, downloaded: token.downloaded, total, done: false });
     }
     downloads.delete(id);
     if (!data.downloaded.includes(id)) data.downloaded.push(id);
     persist();
     mockEmit("model-download-progress", { id, downloaded: total, total, done: true });
   })();
+}
+
+/** Comme `install::ensure_installed` : moteur local sans modèle → téléchargement automatique. */
+function ensureInstalled() {
+  const s = data.settings;
+  if (s.engine !== "local") return;
+  const id = resolveId(s.local_model);
+  if (!data.downloaded.includes(id)) simulateDownload(id);
+}
+
+let autoInstallDone = false;
+
+function downloadStatuses(): DownloadStatus[] {
+  // Premier appel (démarrage de la fenêtre principale) : simule l'auto-installation de Rust.
+  if (!autoInstallDone) {
+    autoInstallDone = true;
+    ensureInstalled();
+  }
+  return [...downloads.entries()].map(([id, d]) => ({ id, downloaded: d.downloaded, total: d.total }));
 }
 
 // ---------- Dictée simulée ----------
@@ -261,6 +285,19 @@ let busy = false;
 
 function startDictation(handsFree = false) {
   if (dictation || busy) return;
+  const s = data.settings;
+  if (s.engine === "local" && !data.downloaded.includes(s.local_model)) {
+    // Comme `pipeline::preflight` : installation automatique, message avec la progression réelle.
+    const id = resolveId(s.local_model);
+    const d = downloads.get(id);
+    const message = d
+      ? `Installation du modèle en cours (${Math.min(99, Math.floor((d.downloaded / Math.max(1, d.total)) * 100))} %) — réessayez dans un instant`
+      : "Installation du modèle…";
+    if (!d) simulateDownload(id);
+    mockEmit("dictation-state", { state: "error", message });
+    setTimeout(() => mockEmit("dictation-state", { state: "idle" }), 2500);
+    return;
+  }
   let level = 0.1;
   let t = 0;
   const timer = setInterval(() => {
@@ -304,12 +341,6 @@ async function stopDictation() {
     return;
   }
   const s = data.settings;
-  if (s.engine === "local" && !data.downloaded.includes(s.local_model)) {
-    mockEmit("dictation-state", { state: "error", message: "Aucun modèle téléchargé" });
-    await sleep(2200);
-    mockEmit("dictation-state", { state: "idle" });
-    return;
-  }
   const text = PHRASES[Math.floor(Math.random() * PHRASES.length)];
   const entry: HistoryEntry = {
     id: `mock-${Date.now()}`,
@@ -429,6 +460,44 @@ export function installMockHotkey() {
   );
 }
 
+// ---------- Mises à jour simulées ----------
+// `?update` : une version 0.2.0 est disponible ; `?update=error` : serveur injoignable.
+
+export const MOCK_VERSION = "0.1.0";
+const updateParam = new URLSearchParams(location.search).get("update");
+const MOCK_UPDATE =
+  updateParam === null || updateParam === "error"
+    ? null
+    : { version: "0.2.0", notes: "Corrections et améliorations de la stabilité." };
+
+if (MOCK_UPDATE) {
+  // Comme `updater::spawn_background` : annonce silencieuse peu après le démarrage.
+  setTimeout(() => mockEmit("update-available", MOCK_UPDATE), 1500);
+}
+
+async function checkUpdate() {
+  await sleep(700);
+  if (updateParam === "error") throw "Impossible de joindre le serveur de mises à jour. Vérifiez votre connexion.";
+  if (MOCK_UPDATE) mockEmit("update-available", MOCK_UPDATE);
+  return MOCK_UPDATE;
+}
+
+let installingUpdate = false;
+async function installUpdate() {
+  if (!MOCK_UPDATE) throw "Aucune mise à jour disponible.";
+  if (installingUpdate) throw "Installation déjà en cours.";
+  installingUpdate = true;
+  const total = 18 * 1024 * 1024;
+  for (let downloaded = 0; downloaded < total; ) {
+    await sleep(100);
+    downloaded = Math.min(total, downloaded + total / 30);
+    mockEmit("update-progress", { downloaded, total });
+  }
+  await sleep(600);
+  // « Relance » : rechargement sans le paramètre ?update.
+  location.href = location.pathname;
+}
+
 // ---------- Commandes ----------
 
 type Impl = {
@@ -439,7 +508,11 @@ const impl: Impl = {
   get_settings: () => structuredClone(data.settings),
   save_settings: async ({ settings }) => {
     await sleep(120);
+    const old = data.settings;
     data.settings = structuredClone(settings);
+    if (settings.engine === "local" && (old.engine !== "local" || old.local_model !== settings.local_model)) {
+      ensureInstalled();
+    }
     persist();
     mockEmit("settings-changed", structuredClone(settings));
   },
@@ -469,6 +542,7 @@ const impl: Impl = {
     const t = downloads.get(id);
     if (t) t.cancelled = true;
   },
+  get_downloads: () => downloadStatuses(),
   delete_model: async ({ id }) => {
     await sleep(150);
     data.downloaded = data.downloaded.filter((d) => d !== id);
@@ -510,6 +584,8 @@ const impl: Impl = {
     }, 1800);
   },
   get_platform: () => detectPlatform(),
+  check_update: () => checkUpdate(),
+  install_update: () => installUpdate(),
 };
 
 export async function mockInvoke(cmd: CommandName, args: unknown): Promise<unknown> {

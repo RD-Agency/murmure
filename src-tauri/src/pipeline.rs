@@ -12,7 +12,7 @@ use crate::history::{self, HistoryEntry};
 use crate::inject::{self, Outcome};
 use crate::settings::{EngineKind, Settings};
 use crate::state::{AppState, LoadedEngine, Phase};
-use crate::{hotkey, models, overlay, tray};
+use crate::{hotkey, install, models, overlay, tray};
 use serde::Serialize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -147,11 +147,14 @@ fn fail(app: &AppHandle, message: &str) {
 }
 
 /// Vérifie que le moteur choisi est utilisable avant d'ouvrir le micro.
-fn preflight(state: &AppState, settings: &Settings) -> Result<(), String> {
+/// Sans modèle local, lance son installation et renvoie le message de progression
+/// (la fenêtre principale n'est pas ouverte : elle ne l'est qu'en cas d'échec du téléchargement).
+fn preflight(app: &AppHandle, state: &AppState, settings: &Settings) -> Result<(), String> {
     match settings.engine {
         EngineKind::Local => {
             if models::model_path(&state.data_dir, &settings.local_model).is_none() {
-                return Err(NO_MODEL_MSG.into());
+                // Pas de modèle : installation automatique (ou progression de celle en cours).
+                return Err(install::on_dictation_without_model(app, settings).unwrap_or_else(|e| e));
             }
         }
         EngineKind::Remote => {
@@ -184,7 +187,7 @@ fn start(app: &AppHandle, hands_free: bool) {
         return;
     }
     let settings = state.settings();
-    if let Err(msg) = preflight(&state, &settings) {
+    if let Err(msg) = preflight(app, &state, &settings) {
         fail(app, &msg);
         return;
     }

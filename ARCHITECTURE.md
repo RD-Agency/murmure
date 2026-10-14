@@ -29,7 +29,9 @@ src-tauri/src/
   history.rs            Historique JSON local                                        [agent système]
   settings.rs           Réglages JSON + clé API dans le trousseau                    [agent audio/moteurs]
   audio.rs              Capture micro cpal → mono 16 kHz f32, niveau RMS             [agent audio/moteurs]
-  models.rs             Catalogue + téléchargement des modèles ggml                  [agent audio/moteurs]
+  models.rs             Catalogue (tailles + SHA256) + téléchargement des modèles ggml [agent audio/moteurs]
+  install.rs            Installation automatique du modèle local + CLI --install-model
+  updater.rs            Mises à jour automatiques (tauri-plugin-updater) : vérification, installation
   engine/mod.rs         enum Engine + TranscribeOptions                              [agent audio/moteurs]
   engine/local.rs       whisper-rs, contexte gardé en mémoire                        [agent audio/moteurs]
   engine/remote.rs      Client HTTP multipart compatible OpenAI                      [agent audio/moteurs]
@@ -73,7 +75,8 @@ Noms snake_case côté Rust, arguments camelCase côté JS (convention Tauri). E
 | `test_remote` | `endpoint: string, apiKey: string \| null, model: string` | `string` (message de succès + latence) |
 | `list_input_devices` | — | `AudioDevice[]` |
 | `list_models` | — | `ModelInfo[]` |
-| `download_model` | `id: string` | `()` (progression par événement) |
+| `download_model` | `id: string` | `()` (progression par événement) ; rejoint le téléchargement déjà en cours au lieu d'échouer |
+| `get_downloads` | — | `DownloadStatus[]` : téléchargements en cours, y compris ceux lancés par Rust au démarrage |
 | `cancel_download` | `id: string` | `()` |
 | `delete_model` | `id: string` | `()` |
 | `start_dictation` / `stop_dictation` / `cancel_dictation` / `toggle_dictation` | — | `()` |
@@ -85,6 +88,8 @@ Noms snake_case côté Rust, arguments camelCase côté JS (convention Tauri). E
 | `request_microphone` | — | `Permissions` |
 | `open_permission_settings` | `kind: "microphone" \| "accessibility"` | `()` |
 | `get_platform` | — | `"macos" \| "linux" \| "windows"` |
+| `check_update` | — | `UpdateInfo \| null` : `null` si à jour ou manifeste absent (404) ; erreur si réseau injoignable. Toujours `null` en dev |
+| `install_update` | — | `()` : télécharge (`update-progress`), installe puis relance l'app (ne rend pas la main en cas de succès). Refusé pendant une dictée |
 
 ## Événements (Rust → front, `emit` global)
 
@@ -96,6 +101,8 @@ Noms snake_case côté Rust, arguments camelCase côté JS (convention Tauri). E
 | `model-download-progress` | `{ id, downloaded, total, done: bool, error?: string }` |
 | `settings-changed` | `Settings` |
 | `navigate` | `"home" \| "history" \| "settings"` (depuis le tray) |
+| `update-available` | `UpdateInfo` — vérification de fond ou `check_update` |
+| `update-progress` | `{ downloaded, total }` octets cumulés (`total` = 0 si inconnu), ~10 Hz |
 
 ## Types
 
@@ -106,8 +113,10 @@ type ModelInfo     = { id: string; name: string; description: string; size_mb: n
 type HistoryEntry  = { id: string; text: string; created_at: string /* RFC3339 */;
                        duration_ms: number; latency_ms: number; engine: "local" | "remote";
                        model: string };
+type DownloadStatus = { id: string; downloaded: number; total: number };
 type Permissions   = { microphone: "granted" | "denied" | "undetermined" | "unknown";
                        accessibility: "granted" | "denied" | "unknown" };
+type UpdateInfo    = { version: string; notes: string | null };
 ```
 
 ## API Rust entre modules (à respecter à la lettre)
@@ -139,6 +148,11 @@ pub fn list(data_dir: &Path) -> Vec<ModelInfo>;
 pub fn model_path(data_dir: &Path, id: &str) -> Option<PathBuf>; // Some si présent sur disque
 pub async fn download(data_dir: &Path, id: &str, cancel: Arc<AtomicBool>,
                       on_progress: impl Fn(u64, u64) + Send + 'static) -> anyhow::Result<PathBuf>;
+// download : espace disque vérifié avant, reprise du .part (Range), SHA256 calculé en streaming,
+// taille + empreinte vérifiées à la fin, 3 nouvelles tentatives après erreur réseau (5 s, 15 s, 45 s).
+// Erreurs : models::DownloadError { Cancelled, Network, Corrupt, NoSpace, Fatal } dans anyhow.
+pub const RECOMMENDED_ID: &str;                                  // "large-v3-turbo-q5_0"
+pub fn resolve_id(id: &str) -> &'static str;                     // id inconnu → recommandé
 pub fn delete(data_dir: &Path, id: &str) -> anyhow::Result<()>;
 
 // engine/mod.rs
@@ -156,6 +170,38 @@ impl RemoteEngine {
 }
 pub fn encode_wav(samples: &[f32]) -> Vec<u8>;                     // PCM 16 bits mono 16 kHz
 ```
+
+## Installation automatique du modèle local (`install.rs`)
+
+- Déclencheurs : démarrage (setup), `save_settings` qui passe `engine` à `local` ou change `local_model`,
+  dictée sans modèle. Cible : `local_model`, ou `RECOMMENDED_ID` si l'id est inconnu ; rien si le modèle
+  est déjà sur disque (dossier Murmure ou `~/.whisper/models`).
+- Registre `state::Downloads` : un seul téléchargement par id ; un second appel (clic UI) le rejoint.
+  Mêmes événements `model-download-progress` et même annulation (`cancel_download`) que le bouton.
+- Fin : si le modèle choisi est absent, on sélectionne celui installé (`settings-changed`), puis préchargement
+  du moteur. La fenêtre principale n'est ouverte de force qu'en cas d'échec du téléchargement.
+- Dictée pendant l'installation : état `error`, message « Installation du modèle en cours (42 %) — réessayez
+  dans un instant » ; sans téléchargement en cours, il est lancé et le message est « Installation du modèle… ».
+- `murmure --install-model [id]` (ou `--install-model=id`) : mode console traité avant Tauri et le
+  single-instance, aucune fenêtre ; progression sur stdout (ligne réécrite sur un terminal, une ligne
+  tous les 5 % sinon). Sans id : le modèle des réglages. Codes de sortie : 0 succès, 1 échec, 2 id inconnu.
+- `MURMURE_DATA_DIR` : remplace le dossier de données (modèles, historique) de l'app et du CLI.
+
+## Mises à jour (`updater.rs`)
+
+- Manifeste : `https://crgenerator.s3.eu-west-par.io.cloud.ovh.net/murmure/latest.json` (format Tauri v2,
+  clés `darwin-aarch64`, `darwin-x86_64`, `linux-x86_64`, `windows-x86_64`), publié par la CI.
+  Clé publique minisign dans `tauri.conf.json` (`plugins.updater.pubkey`) ; la clé privée et son mot de passe
+  ne vivent que dans `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (CI / poste de build).
+- `bundle.createUpdaterArtifacts: true` : `pnpm tauri build` produit `Murmure.app.tar.gz` + `.sig` (macOS),
+  `.AppImage.tar.gz`/`.sig` ou équivalents (Linux), installeur + `.sig` (Windows, `installMode: "passive"`).
+- Vérification silencieuse 10 s après le démarrage puis toutes les 6 h, jamais pendant une dictée (attente
+  du retour à `idle`), désactivée en build debug. Rien n'est téléchargé sans action de l'utilisateur.
+- Mise à jour trouvée : `update-available`, entrée « Installer la mise à jour x.y.z » en tête du menu du tray,
+  bannière sur l'accueil, état dans Réglages › Général.
+- Manifeste absent (404), plateforme absente, réseau coupé : log debug uniquement (les logs `error` du plugin
+  sont coupés via `tauri_plugin_updater=off` dans le filtre par défaut, surchargeable par `RUST_LOG`).
+- Mode démo navigateur : `?update` simule une 0.2.0 disponible, `?update=error` un serveur injoignable.
 
 ## Flux de dictée
 

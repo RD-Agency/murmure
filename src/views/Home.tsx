@@ -3,8 +3,10 @@ import { Card } from "../components/Card";
 import { EngineStatus, useEngineReady } from "../components/EngineStatus";
 import { HistoryItem } from "../components/HistoryItem";
 import { IconArrowRight, IconMic } from "../components/Icons";
+import { InstallCard, useActiveInstall } from "../components/InstallCard";
 import { HotkeyKeys } from "../components/Kbd";
 import { PageHeader } from "../components/PageHeader";
+import { UpdateBanner } from "../components/UpdateBanner";
 import { countWords, formatLatency, formatNumber, isSameDay } from "../lib/format";
 import { useApp } from "../store";
 
@@ -20,6 +22,7 @@ export function Home() {
   const history = useApp((s) => s.history);
   const setView = useApp((s) => s.setView);
   const ready = useEngineReady();
+  const installing = !!useActiveInstall() && !ready;
 
   const stats = useMemo(() => {
     const today = new Date();
@@ -47,14 +50,17 @@ export function Home() {
       <PageHeader title="Accueil" subtitle="Dictez dans n'importe quelle application." />
       <div className="flex-1 overflow-y-auto px-10 pb-10">
         <div className="mx-auto grid max-w-[760px] gap-5">
+          {/* Mise à jour disponible / en cours */}
+          <UpdateBanner />
+
           {/* Raccourci + moteur */}
           <Card className="overflow-hidden">
             <div className="p-6">
               <div
-                className={`mb-4 flex items-center gap-2 text-[12px] font-medium ${ready ? "text-accent" : "text-warning"}`}
+                className={`mb-4 flex items-center gap-2 text-[12px] font-medium ${ready || installing ? "text-accent" : "text-warning"}`}
               >
                 <IconMic size={14} />
-                {ready ? "Prêt à dicter" : "Configuration requise"}
+                {ready ? "Prêt à dicter" : installing ? "Prêt dans un instant" : "Configuration requise"}
               </div>
               <div className="flex flex-wrap items-center gap-x-8 gap-y-4">
                 <HotkeyKeys accelerator={settings.hotkey} platform={platform} size="lg" />
@@ -65,6 +71,9 @@ export function Home() {
               <EngineStatus />
             </div>
           </Card>
+
+          {/* Installation automatique du modèle local */}
+          <InstallCard />
 
           {/* Statistiques */}
           <div className="grid grid-cols-3 gap-3">

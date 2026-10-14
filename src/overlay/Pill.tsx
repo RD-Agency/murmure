@@ -6,10 +6,15 @@ import { Waveform } from "./Waveform";
 interface Props {
   status: DictationStatePayload;
   levelRef: { current: number };
+  /** Progression en direct de l'installation du modèle, si un téléchargement tourne. */
+  installPct?: number | null;
 }
 
+/** Message de dictée sans modèle prêt (voir `install::dictation_message` côté Rust). */
+const INSTALL_RE = /^Installation du modèle/;
+
 /** Pastille de dictée : enregistrement, transcription, erreur. */
-export function Pill({ status, levelRef }: Props) {
+export function Pill({ status, levelRef, installPct = null }: Props) {
   const visible = status.state !== "idle";
   // Garde le dernier contenu visible pendant l'animation de sortie.
   const [shown, setShown] = useState<DictationStatePayload>(status);
@@ -32,6 +37,10 @@ export function Pill({ status, levelRef }: Props) {
   const s = shown.state;
   // Un collage impossible arrive en « error » avec un message du type « texte copié dans le presse-papiers ».
   const info = s === "error" && /copi/i.test(shown.message ?? "");
+  // Dictée pendant l'installation du modèle : état informatif, pourcentage tenu à jour en direct.
+  const installing = s === "error" && INSTALL_RE.test(shown.message ?? "");
+  const parsedPct = /\((\d+)\s*%\)/.exec(shown.message ?? "")?.[1];
+  const pct = installPct ?? (parsedPct ? Number(parsedPct) : null);
 
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-1">
@@ -67,7 +76,20 @@ export function Pill({ status, levelRef }: Props) {
             <span className="shimmer text-[12.5px] font-medium">Transcription</span>
           </div>
         )}
-        {s === "error" && (
+        {installing && (
+          <div key="inst" className="flex animate-fade-in items-center gap-2 px-0.5">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#a9a9ff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden className="shrink-0">
+              <path d="M12 4v11" />
+              <path d="m7.5 10.5 4.5 4.5 4.5-4.5" />
+              <path d="M4.5 19.5h15" />
+            </svg>
+            <span className="text-[12.5px] font-medium text-white/90">Installation du modèle</span>
+            {pct !== null && (
+              <span className="w-[34px] text-right text-[11.5px] font-medium text-white/65 tabular-nums">{pct} %</span>
+            )}
+          </div>
+        )}
+        {s === "error" && !installing && (
           <div key="err" className="flex max-w-[220px] animate-fade-in items-center gap-2 px-0.5">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={info ? "#a9a9ff" : "#ff8a80"} strokeWidth="2" strokeLinecap="round" aria-hidden className="shrink-0">
               {info ? (
@@ -88,11 +110,11 @@ export function Pill({ status, levelRef }: Props) {
       </div>
       <div
         className={`pill-chip rounded-full px-2.5 py-[2px] text-[10.5px] font-medium text-white/75 transition-[opacity,transform] duration-200 ${
-          visible && s === "recording" && shown.hands_free ? "translate-y-0 opacity-100" : "-translate-y-1 opacity-0"
+          visible && ((s === "recording" && shown.hands_free) || installing) ? "translate-y-0 opacity-100" : "-translate-y-1 opacity-0"
         }`}
-        aria-hidden={!(s === "recording" && shown.hands_free)}
+        aria-hidden={!((s === "recording" && shown.hands_free) || installing)}
       >
-        Mains libres · Échap pour annuler
+        {installing ? (pct !== null ? "Réessayez dans un instant" : "Murmure télécharge son modèle") : "Mains libres · Échap pour annuler"}
       </div>
     </div>
   );

@@ -1,4 +1,4 @@
-import { hostOf } from "../lib/format";
+import { downloadPercent, hostOf } from "../lib/format";
 import { useApp } from "../store";
 import { StatusDot } from "./Badge";
 import { Button } from "./Button";
@@ -26,7 +26,7 @@ export function EngineStatus() {
       status = "Prêt · hors ligne";
     } else if (downloading) {
       tone = "accent";
-      status = `Téléchargement… ${Math.round((downloading.downloaded / Math.max(1, downloading.total)) * 100)} %`;
+      status = `Installation… ${downloadPercent(downloading.downloaded, downloading.total)} %`;
     } else {
       tone = "warning";
       status = "Modèle non téléchargé";

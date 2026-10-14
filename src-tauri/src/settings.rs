@@ -202,12 +202,14 @@ mod tests {
     #[test]
     fn aller_retour() {
         let dir = temp_dir("roundtrip");
-        let mut s = Settings::default();
-        s.engine = EngineKind::Remote;
-        s.remote_endpoint = "https://stt.exemple.fr".into();
-        s.input_device = Some("MacBook Pro Microphone".into());
-        s.hotkey_mode = HotkeyMode::Toggle;
-        s.onboarding_done = true;
+        let s = Settings {
+            engine: EngineKind::Remote,
+            remote_endpoint: "https://stt.exemple.fr".into(),
+            input_device: Some("MacBook Pro Microphone".into()),
+            hotkey_mode: HotkeyMode::Toggle,
+            onboarding_done: true,
+            ..Settings::default()
+        };
         save(&dir, &s).unwrap();
         assert!(!dir.join("settings.json.tmp").exists());
         let l = load(&dir);

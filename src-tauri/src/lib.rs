@@ -8,11 +8,13 @@ pub mod settings;
 pub mod history;
 pub mod hotkey;
 pub mod inject;
+pub mod install;
 pub mod overlay;
 pub mod permissions;
 pub mod pipeline;
 pub mod state;
 pub mod tray;
+pub mod updater;
 
 use crate::engine::RemoteEngine;
 use crate::history::HistoryEntry;
@@ -20,10 +22,6 @@ use crate::models::ModelInfo;
 use crate::pipeline::Command;
 use crate::settings::{EngineKind, Settings};
 use crate::state::AppState;
-use serde::Serialize;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_opener::OpenerExt as _;
@@ -102,6 +100,10 @@ async fn save_settings(app: AppHandle, state: State<'_, AppState>, settings: Set
         EngineKind::Local => {
             state.unload_engine_unless(&settings.local_model);
             preload_local_engine(&app);
+            // Passage au local ou nouveau modèle absent du disque : installation automatique.
+            if install::settings_trigger(&old, &settings) {
+                install::ensure_installed(&app);
+            }
         }
         EngineKind::Remote => {
             if state.engine.lock().take().is_some() {
@@ -178,81 +180,27 @@ async fn list_models(state: State<'_, AppState>) -> CmdResult<Vec<ModelInfo>> {
         .map_err(err_str)
 }
 
-#[derive(Clone, Serialize)]
-struct DownloadProgress {
-    id: String,
-    downloaded: u64,
-    total: u64,
-    done: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
-
+/// Lance le téléchargement, ou rejoint celui déjà en cours (auto-installation comprise).
 #[tauri::command]
-fn download_model(app: AppHandle, state: State<'_, AppState>, id: String) -> CmdResult<()> {
-    let cancel = Arc::new(AtomicBool::new(false));
-    {
-        let mut downloads = state.downloads.lock();
-        if downloads.contains_key(&id) {
-            return Err("Ce modèle est déjà en cours de téléchargement.".into());
-        }
-        downloads.insert(id.clone(), cancel.clone());
-    }
-    let data_dir = state.data_dir.clone();
-    tauri::async_runtime::spawn(async move {
-        let progress_app = app.clone();
-        let progress_id = id.clone();
-        let last = parking_lot::Mutex::new(None::<Instant>);
-        let on_progress = move |downloaded: u64, total: u64| {
-            // ~10 événements/s maximum, plus le dernier.
-            let mut last = last.lock();
-            let due = last.is_none_or(|t| t.elapsed() >= Duration::from_millis(100));
-            if due || (total > 0 && downloaded >= total) {
-                *last = Some(Instant::now());
-                let _ = progress_app.emit(
-                    "model-download-progress",
-                    DownloadProgress { id: progress_id.clone(), downloaded, total, done: false, error: None },
-                );
-            }
-        };
-        let result = models::download(&data_dir, &id, cancel.clone(), on_progress).await;
-        let state = app.state::<AppState>();
-        state.downloads.lock().remove(&id);
-        let (downloaded, total, error) = match &result {
-            Ok(path) => {
-                let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-                (size, size, None)
-            }
-            Err(_) if cancel.load(Ordering::Relaxed) => (0, 0, Some("Téléchargement annulé".to_string())),
-            Err(e) => (0, 0, Some(format!("Échec du téléchargement : {e}"))),
-        };
-        if let Some(e) = &error {
-            log::warn!("modèle {id} : {e}");
-        } else {
-            log::info!("modèle {id} téléchargé");
-        }
-        let _ = app.emit(
-            "model-download-progress",
-            DownloadProgress { id: id.clone(), downloaded, total, done: true, error },
-        );
-        if result.is_ok() {
-            preload_local_engine(&app);
-        }
-    });
-    Ok(())
+fn download_model(app: AppHandle, id: String) -> CmdResult<()> {
+    install::start(&app, &id, install::Origin::User).map(|_| ())
 }
 
 #[tauri::command]
 fn cancel_download(state: State<'_, AppState>, id: String) -> CmdResult<()> {
-    if let Some(flag) = state.downloads.lock().get(&id) {
-        flag.store(true, Ordering::Relaxed);
-    }
+    state.downloads.cancel(&id);
     Ok(())
+}
+
+/// Téléchargements en cours (y compris ceux lancés par Rust au démarrage).
+#[tauri::command]
+fn get_downloads(state: State<'_, AppState>) -> Vec<state::DownloadStatus> {
+    state.downloads.snapshot()
 }
 
 #[tauri::command]
 async fn delete_model(state: State<'_, AppState>, id: String) -> CmdResult<()> {
-    if state.downloads.lock().contains_key(&id) {
+    if state.downloads.contains(&id) {
         return Err("Annulez d'abord le téléchargement en cours.".into());
     }
     {
@@ -269,7 +217,7 @@ async fn delete_model(state: State<'_, AppState>, id: String) -> CmdResult<()> {
 }
 
 /// Charge en arrière-plan le moteur local si le moteur local est choisi et le modèle présent.
-fn preload_local_engine(app: &AppHandle) {
+pub(crate) fn preload_local_engine(app: &AppHandle) {
     let state = app.state::<AppState>();
     let s = state.settings();
     if s.engine != EngineKind::Local {
@@ -372,12 +320,30 @@ fn get_platform() -> &'static str {
     }
 }
 
+// ───────────────────────────── Mises à jour ──────────────────────────────────
+
+/// Vérifie maintenant ; `None` si l'app est à jour (ou manifeste pas encore publié).
+#[tauri::command]
+async fn check_update(app: AppHandle) -> CmdResult<Option<updater::UpdateInfo>> {
+    updater::check(&app).await
+}
+
+/// Télécharge (événements `update-progress`), installe puis relance l'app.
+#[tauri::command]
+async fn install_update(app: AppHandle) -> CmdResult<()> {
+    updater::install(&app).await
+}
+
 // ──────────────────────────────── Démarrage ──────────────────────────────────
 
 fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let handle = app.handle().clone();
     let config_dir = app.path().app_config_dir()?;
-    let data_dir = app.path().app_data_dir()?;
+    // MURMURE_DATA_DIR : dossier de données imposé (tests, CI, déploiement en parc).
+    let data_dir = match install::data_dir_override() {
+        Some(d) => d,
+        None => app.path().app_data_dir()?,
+    };
     std::fs::create_dir_all(&config_dir)?;
     std::fs::create_dir_all(&data_dir)?;
     log::info!("config : {} — données : {}", config_dir.display(), data_dir.display());
@@ -386,6 +352,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let (tx, rx) = std::sync::mpsc::channel::<Command>();
     app.manage(AppState::new(config_dir, data_dir, settings.clone(), tx));
     app.manage(hotkey::Registered::default());
+    app.manage(updater::UpdaterState::default());
     pipeline::spawn_worker(handle.clone(), rx);
 
     tray::create(&handle)?;
@@ -398,6 +365,10 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         log::warn!("autostart : {e}");
     }
     preload_local_engine(&handle);
+    // Modèle local absent : installation en arrière-plan (préchargement à la fin).
+    install::ensure_installed(&handle);
+    // Mises à jour : vérification silencieuse (10 s puis toutes les 6 h, hors dictée et hors dev).
+    updater::spawn_background(&handle);
 
     if std::env::args().any(|a| a == HIDDEN_ARG) && settings.onboarding_done {
         hide_main_window(&handle);
@@ -407,9 +378,20 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,murmure_lib=debug"))
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(
+        // Le plugin updater journalise en `error` un manifeste absent ou un réseau coupé :
+        // on le coupe, `updater.rs` trace lui-même ces cas en debug.
+        "info,murmure_lib=debug,tauri_plugin_updater=off",
+    ))
         .format_timestamp_millis()
         .init();
+
+    // `murmure --install-model [id]` : mode console, AVANT Tauri et le single-instance
+    // (aucune fenêtre, fonctionne même si une instance graphique tourne déjà).
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(code) = install::cli(&args) {
+        std::process::exit(code);
+    }
 
     let app = tauri::Builder::default()
         // single-instance doit être le premier plugin enregistré.
@@ -430,6 +412,8 @@ pub fn run() {
                 .app_name("Murmure")
                 .build(),
         )
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(setup)
         .on_window_event(|window, event| {
             if window.label() == MAIN_WINDOW
@@ -450,6 +434,7 @@ pub fn run() {
             list_models,
             download_model,
             cancel_download,
+            get_downloads,
             delete_model,
             start_dictation,
             stop_dictation,
@@ -463,6 +448,8 @@ pub fn run() {
             request_microphone,
             open_permission_settings,
             get_platform,
+            check_update,
+            install_update,
         ])
         .build(tauri::generate_context!());
 

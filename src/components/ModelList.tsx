@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { formatBytes, formatSize } from "../lib/format";
+import { downloadPercent, formatProgressSize, formatSize } from "../lib/format";
 import type { ModelInfo } from "../lib/types";
 import { useApp } from "../store";
 import { Badge } from "./Badge";
@@ -40,7 +40,7 @@ function ModelRow({ model, selected, onSelect }: { model: ModelInfo; selected: b
   const [deleting, setDeleting] = useState(false);
 
   const downloading = !!progress && !progress.done;
-  const ratio = progress && progress.total > 0 ? progress.downloaded / progress.total : 0;
+  const percent = progress ? downloadPercent(progress.downloaded, progress.total) : 0;
   const selectable = model.downloaded;
 
   return (
@@ -125,9 +125,9 @@ function ModelRow({ model, selected, onSelect }: { model: ModelInfo; selected: b
       </div>
       {downloading && (
         <div className="mt-3 ml-8 flex animate-fade-in items-center gap-3">
-          <Progress value={ratio} label={`Téléchargement de ${model.name}`} />
-          <span className="w-[120px] shrink-0 text-right text-[11.5px] text-muted tabular-nums">
-            {formatBytes(progress.downloaded)} / {formatBytes(progress.total)}
+          <Progress value={percent / 100} label={`Installation de ${model.name}`} />
+          <span className="w-[150px] shrink-0 text-right text-[11.5px] text-muted tabular-nums">
+            {percent} % · {formatProgressSize(progress.downloaded, progress.total)}
           </span>
         </div>
       )}

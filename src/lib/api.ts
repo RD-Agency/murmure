@@ -1,6 +1,7 @@
 // Seule porte vers Rust : wrappers typés autour de invoke/listen.
 // Hors Tauri (navigateur), bascule automatiquement sur un mock (src/lib/mock.ts).
 
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
@@ -74,6 +75,7 @@ export const api = {
   listModels: () => call("list_models"),
   downloadModel: (id: string) => call("download_model", { id }),
   cancelDownload: (id: string) => call("cancel_download", { id }),
+  getDownloads: () => call("get_downloads"),
   deleteModel: (id: string) => call("delete_model", { id }),
   startDictation: () => call("start_dictation"),
   stopDictation: () => call("stop_dictation"),
@@ -88,4 +90,9 @@ export const api = {
   openPermissionSettings: (kind: PermissionKind) =>
     call("open_permission_settings", { kind }),
   getPlatform: () => call("get_platform"),
+  checkUpdate: () => call("check_update"),
+  /** Télécharge (événements `update-progress`), installe puis relance l'app. */
+  installUpdate: () => call("install_update"),
+  /** Version de l'app en cours d'exécution. */
+  getVersion: async (): Promise<string> => (isTauri ? getVersion() : (await loadMock()).MOCK_VERSION),
 };

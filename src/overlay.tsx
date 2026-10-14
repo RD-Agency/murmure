@@ -1,18 +1,21 @@
 import { StrictMode, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { isMock, on } from "./lib/api";
+import { downloadPercent } from "./lib/format";
 import type { DictationStatePayload } from "./lib/types";
 import { Pill } from "./overlay/Pill";
 import "./styles.css";
 
 // Les sons de début/fin sont joués côté Rust : l'overlay ne fait qu'afficher.
 
-type Demo = "recording" | "handsfree" | "transcribing" | "error" | "cycle";
+type Demo = "recording" | "handsfree" | "transcribing" | "error" | "installing" | "cycle";
 
 function demoParam(): Demo | null {
   if (!isMock) return null;
   const v = new URLSearchParams(location.search).get("demo");
-  return v === "recording" || v === "handsfree" || v === "transcribing" || v === "error" || v === "cycle" ? v : null;
+  return v === "recording" || v === "handsfree" || v === "transcribing" || v === "error" || v === "installing" || v === "cycle"
+    ? v
+    : null;
 }
 
 const DEMO_STATES: Record<Exclude<Demo, "cycle">, DictationStatePayload> = {
@@ -20,6 +23,7 @@ const DEMO_STATES: Record<Exclude<Demo, "cycle">, DictationStatePayload> = {
   handsfree: { state: "recording", hands_free: true },
   transcribing: { state: "transcribing" },
   error: { state: "error", message: "Micro introuvable" },
+  installing: { state: "error", message: "Installation du modèle en cours (42 %) — réessayez dans un instant" },
 };
 
 function Overlay() {
@@ -28,15 +32,21 @@ function Overlay() {
     demo && demo !== "cycle" ? DEMO_STATES[demo] : { state: "idle" },
   );
   const levelRef = useRef(0);
+  // Progression en direct de l'installation du modèle (affichée si l'on dicte pendant le téléchargement).
+  const [installPct, setInstallPct] = useState<number | null>(null);
 
   useEffect(() => {
     const offState = on("dictation-state", setStatus);
+    const offDownload = on("model-download-progress", (p) => {
+      setInstallPct(p.done ? null : downloadPercent(p.downloaded, p.total));
+    });
     const offLevel = on("audio-level", (l) => {
       levelRef.current = l;
     });
     return () => {
       offState();
       offLevel();
+      offDownload();
     };
   }, []);
 
@@ -73,7 +83,7 @@ function Overlay() {
     };
   }, [demo]);
 
-  return <Pill status={status} levelRef={levelRef} />;
+  return <Pill status={status} levelRef={levelRef} installPct={installPct} />;
 }
 
 if (demoParam()) document.documentElement.classList.add("overlay-demo");

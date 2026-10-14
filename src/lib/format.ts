@@ -247,3 +247,19 @@ export const LANGUAGES: { code: string; label: string }[] = [
 export function normalizeSearch(s: string): string {
   return s.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
 }
+
+/** Pourcentage entier d'un téléchargement, plafonné à 99 tant qu'il n'est pas vérifié (comme Rust). */
+export function downloadPercent(downloaded: number, total: number): number {
+  if (total <= 0) return 0;
+  return Math.min(99, Math.floor((Math.min(downloaded, total) / total) * 100));
+}
+
+/** « 312 / 547 Mo » (ou « 1,2 / 1,5 Go ») : même unité des deux côtés. */
+export function formatProgressSize(downloaded: number, total: number): string {
+  const mb = 1024 * 1024;
+  if (total >= 1000 * mb) {
+    const go = (b: number) => (b / (1024 * mb)).toLocaleString("fr-FR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+    return `${go(downloaded)} / ${go(total)} Go`;
+  }
+  return `${Math.round(downloaded / mb)} / ${Math.round(total / mb)} Mo`;
+}

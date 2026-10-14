@@ -19,6 +19,7 @@ import { SaveIndicator } from "../components/SaveIndicator";
 import { Segmented } from "../components/Segmented";
 import { Select } from "../components/Select";
 import { Switch } from "../components/Switch";
+import { UpdateRow } from "../components/UpdateBanner";
 import { api } from "../lib/api";
 import { LANGUAGES } from "../lib/format";
 import type { AudioDevice, HotkeyMode } from "../lib/types";
@@ -245,10 +246,10 @@ export function Settings() {
                   onChange={(history_enabled) => update({ history_enabled })}
                 />
               </Row>
+              <UpdateRow />
             </Group>
           </Section>
 
-          <p className="text-center text-[11.5px] text-subtle">Murmure 0.1.0</p>
         </div>
       </div>
     </div>

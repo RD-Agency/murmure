@@ -48,7 +48,33 @@ cd server && uv run pytest
 Mode démo du front : `?reset` relance l'onboarding, `?theme=light`, `?platform=linux`,
 `overlay.html?demo=recording|handsfree|transcribing|error|cycle` pour la pastille.
 
-Release : pousser un tag `vX.Y.Z` construit les installeurs (GitHub Actions) dans une release brouillon.
+## Téléchargement et release
+
+Page publique : **https://crgenerator.s3.eu-west-par.io.cloud.ovh.net/murmure/index.html**
+
+Liens stables vers la dernière version : `…/murmure/latest/Murmure-macos-arm64.dmg`, `Murmure-macos-x64.dmg`,
+`Murmure-windows-x64-setup.exe`, `Murmure-linux-x64.AppImage` / `.deb` / `.rpm`, `Murmure-linux-x64-cuda.deb`.
+
+Publier une version : `git tag v0.2.0 && git push --tags` (ou Actions › Release › Run workflow). La CI construit
+macOS (Apple Silicon et Intel, signé et notarisé), Windows, Linux (et une variante CUDA), publie sur S3 et dans une
+release GitHub brouillon, régénère la page et `latest.json` : les apps installées proposent alors la mise à jour.
+
+Secrets du repo : `APPLE_*` (signature et notarisation), `OVH_S3_ACCESS_KEY` / `OVH_S3_SECRET_KEY`,
+`TAURI_SIGNING_PRIVATE_KEY(_PASSWORD)` (clé des mises à jour, sauvegardée dans `~/.murmure-signing/`).
+
+## Modèle local
+
+Le modèle s'installe tout seul en arrière-plan au premier lancement (environ 550 Mo, vérifié par SHA256,
+reprise automatique après une coupure). Pour l'installer à l'avance sur un parc de postes, sans fenêtre :
+
+```bash
+murmure --install-model                     # modèle des réglages (par défaut large-v3-turbo-q5_0)
+murmure --install-model small-q5_1          # modèle précis
+MURMURE_DATA_DIR=/chemin murmure --install-model   # dossier de données imposé (tests, CI)
+```
+
+Sous Windows, l'exécutable de release n'a pas de console : la progression ne s'affiche pas, seul le code
+de sortie fait foi.
 
 ## Permissions
 
