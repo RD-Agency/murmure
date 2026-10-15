@@ -6,7 +6,8 @@ on relâche : le texte arrive là où se trouve le curseur, dans n'importe quell
 Deux moteurs au choix :
 
 - **Sur cet appareil** : Whisper large-v3-turbo via whisper.cpp. Hors ligne, rien ne sort de la machine.
-  Accélération Metal sur Mac, CUDA ou Vulkan en option ailleurs.
+  Accélération Metal sur Mac ; sous Linux, variantes NVIDIA (CUDA) et Vulkan (NVIDIA, AMD, Intel),
+  repli automatique sur le processeur sans GPU utilisable.
 - **Serveur** : n'importe quel endpoint compatible OpenAI (`/v1/audio/transcriptions`) avec une clé API :
   notre serveur auto-hébergé (`server/`), OpenAI ou Groq.
 
@@ -30,8 +31,13 @@ pnpm install
 pnpm tauri dev          # application complète
 pnpm dev                # front seul dans le navigateur, en mode démo (données factices)
 pnpm tauri build        # installeurs (.dmg, .deb/.rpm/AppImage, .msi)
-pnpm tauri build -- --features cuda   # Linux/Windows avec GPU NVIDIA
+pnpm tauri build -- --features cuda     # Linux/Windows avec GPU NVIDIA (CUDA Toolkit requis)
+pnpm tauri build -- --features vulkan   # GPU NVIDIA/AMD/Intel via Vulkan (Linux : libvulkan-dev + glslc)
 ```
+
+`cuda` et `vulkan` s'excluent. Sous Ubuntu 22.04, `glslc` n'est pas packagé : la CI prend `glslc` et les en-têtes
+dans le SDK LunarG (`VULKAN_SDK`). L'accélération retenue s'affiche dans l'app (« Accélération : Vulkan · … ») et
+dans le journal (`Accélération : Vulkan (NVIDIA GeForce RTX 5050)`).
 
 Tests :
 
@@ -39,6 +45,7 @@ Tests :
 cd src-tauri && cargo test --lib
 # Moteur local sur un vrai modèle (voir ~/.whisper/models ou le dossier de modèles de l'app) :
 MURMURE_TEST_WAV=t.wav cargo test --release --lib engine::local -- --ignored --nocapture
+# (MURMURE_TEST_MODEL=/chemin/ggml-base.bin pour un autre modèle que large-v3-turbo)
 # Client distant contre un serveur réel :
 MURMURE_E2E_URL=http://127.0.0.1:8000 MURMURE_E2E_KEY=mrm_… MURMURE_TEST_WAV=t.wav \
   cargo test --lib engine::remote -- --ignored --nocapture
@@ -53,11 +60,22 @@ Mode démo du front : `?reset` relance l'onboarding, `?theme=light`, `?platform=
 Page publique : **https://crgenerator.s3.eu-west-par.io.cloud.ovh.net/murmure/index.html**
 
 Liens stables vers la dernière version : `…/murmure/latest/Murmure-macos-arm64.dmg`, `Murmure-macos-x64.dmg`,
-`Murmure-windows-x64-setup.exe`, `Murmure-linux-x64.AppImage` / `.deb` / `.rpm`, `Murmure-linux-x64-cuda.deb`.
+`Murmure-windows-x64-setup.exe`, `Murmure-linux-x64.AppImage` / `.deb` / `.rpm`, `Murmure-linux-x64-cuda.deb` / `.rpm`,
+`Murmure-linux-x64-vulkan.deb` / `.rpm`.
 
 Publier une version : `git tag v0.2.0 && git push --tags` (ou Actions › Release › Run workflow). La CI construit
-macOS (Apple Silicon et Intel, signé et notarisé), Windows, Linux (et une variante CUDA), publie sur S3 et dans une
-release GitHub brouillon, régénère la page et `latest.json` : les apps installées proposent alors la mise à jour.
+macOS (Apple Silicon et Intel, signé et notarisé), Windows, Linux (et des variantes CUDA et Vulkan), publie sur S3 et dans une
+release GitHub brouillon, régénère la page et `latest.json` (plus `cuda/latest.json` et `vulkan/latest.json`, pour
+qu'une installation GPU reste sur sa variante) : les apps installées proposent alors la mise à jour.
+
+### Variante Linux Vulkan
+
+Accélération GPU par Vulkan : NVIDIA, AMD et Intel, sans CUDA ni bibliothèque embarquée (paquet léger). Seuls
+`libvulkan.so.1` et le pilote ICD du GPU sont requis, présents d'office avec les pilotes NVIDIA et Mesa. Dépendances
+des paquets : `libvulkan1` (.deb), `libvulkan.so.1()(64bit)` (.rpm, satisfaite par `libvulkan1` sur openSUSE et
+`vulkan-loader` sur Fedora). Sans périphérique Vulkan (pas de pilote, ou seulement le pilote logiciel lavapipe que
+whisper.cpp ignore), la transcription se fait sur le processeur. C'est aussi la solution de repli si la variante
+CUDA ne démarre pas. `GGML_VK_VISIBLE_DEVICES=1` choisit un autre GPU (index `vulkaninfo`).
 
 Secrets du repo : `APPLE_*` (signature et notarisation), `OVH_S3_ACCESS_KEY` / `OVH_S3_SECRET_KEY`,
 `TAURI_SIGNING_PRIVATE_KEY(_PASSWORD)` (clé des mises à jour, sauvegardée dans `~/.murmure-signing/`).

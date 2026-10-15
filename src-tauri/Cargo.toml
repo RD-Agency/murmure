@@ -19,7 +19,10 @@ tauri-build = { version = "2", features = [] }
 
 [features]
 default = []
-# Accélération GPU NVIDIA pour le moteur local (Linux/Windows) : cargo build --features cuda
+# Accélération GPU du moteur local (Linux/Windows), une seule à la fois :
+#   cuda   : NVIDIA uniquement, CUDA Toolkit au build, bibliothèques CUDA livrées avec le paquet ;
+#   vulkan : NVIDIA, AMD, Intel ; au build libvulkan-dev + glslc, à l'exécution libvulkan.so.1 + pilote.
+# Sans GPU utilisable à l'exécution, whisper.cpp se replie sur le processeur.
 cuda = ["whisper-rs/cuda"]
 vulkan = ["whisper-rs/vulkan"]
 
@@ -47,7 +50,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 cpal = "0.15"
 hound = "3.5"
 rubato = "0.16"
-whisper-rs = "0.15"
+whisper-rs = { version = "0.15", features = ["raw-api"] }
 arboard = "3"
 enigo = "0.5"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
@@ -57,7 +60,7 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-whisper-rs = { version = "0.15", features = ["metal"] }
+whisper-rs = { version = "0.15", features = ["metal", "raw-api"] }
 # Permissions (AVFoundation) et réglages fins de la fenêtre overlay (NSWindow)
 objc2 = "0.6"
 block2 = "0.6"

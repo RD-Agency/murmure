@@ -586,6 +586,7 @@ const impl: Impl = {
     }, 1800);
   },
   get_platform: () => detectPlatform(),
+  get_acceleration: () => (detectPlatform() === "macos" ? "Metal · Apple M2" : "Vulkan · NVIDIA GeForce RTX 5050"),
   check_update: () => checkUpdate(),
   install_update: () => installUpdate(),
 };

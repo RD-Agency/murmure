@@ -38,6 +38,49 @@ jobs:
         working-directory: src-tauri
         run: cargo test --lib
 
+  vulkan:
+    # Variante Linux Vulkan : vérifie que whisper.cpp (shaders compris) compile et que les tests passent.
+    name: App (ubuntu-22.04, Vulkan)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Dépendances système
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            libasound2-dev libxdo-dev libssl-dev cmake clang libvulkan-dev
+      - name: Vulkan SDK (glslc et en-têtes récents ; glslc absent des dépôts Ubuntu 22.04)
+        run: |
+          V=1.4.341.1
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/vulkansdk.tar.xz" \
+            "https://sdk.lunarg.com/sdk/download/$V/linux/vulkansdk-linux-x86_64-$V.tar.xz"
+          tar -xJf "$RUNNER_TEMP/vulkansdk.tar.xz" -C "$RUNNER_TEMP" --wildcards \
+            "$V/x86_64/bin/glslc" "$V/x86_64/include/*" "$V/x86_64/lib/libvulkan.so*"
+          rm "$RUNNER_TEMP/vulkansdk.tar.xz"
+          echo "VULKAN_SDK=$RUNNER_TEMP/$V/x86_64" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/$V/x86_64/bin" >> "$GITHUB_PATH"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: vulkan
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: cargo clippy + test (sans GPU, repli processeur)
+        working-directory: src-tauri
+        run: |
+          cargo clippy --all-targets --features vulkan -- -D warnings
+          cargo test --lib --features vulkan -- --show-output
+
   server:
     name: Serveur
     runs-on: ubuntu-latest

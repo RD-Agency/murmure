@@ -90,6 +90,8 @@ export const api = {
   openPermissionSettings: (kind: PermissionKind) =>
     call("open_permission_settings", { kind }),
   getPlatform: () => call("get_platform"),
+  /** Accélération du moteur local (« Vulkan · NVIDIA GeForce RTX 5050 », « Processeur »…). */
+  getAcceleration: () => call("get_acceleration"),
   checkUpdate: () => call("check_update"),
   /** Télécharge (événements `update-progress`), installe puis relance l'app. */
   installUpdate: () => call("install_update"),

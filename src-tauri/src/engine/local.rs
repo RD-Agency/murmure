@@ -15,13 +15,58 @@ const NO_SPEECH_DROP: f32 = 0.8;
 static LOG_HOOK: Once = Once::new();
 
 /// Stratégie de décodage. Mesuré sur M-series (Metal, large-v3-turbo, 13,5 s d'audio) :
-/// greedy ≈ 565 ms, beam 5 ≈ 600 ms (+6 %) → beam 5 quand un GPU est compilé.
+/// greedy ≈ 565 ms, beam 5 ≈ 600 ms (+6 %) → beam 5 quand un GPU est utilisé.
 /// Sur CPU seul le décodeur pèse bien plus lourd : greedy.
-fn default_strategy() -> SamplingStrategy {
-    if cfg!(any(target_os = "macos", feature = "cuda", feature = "vulkan")) {
+fn default_strategy(gpu: bool) -> SamplingStrategy {
+    if gpu {
         SamplingStrategy::BeamSearch { beam_size: 5, patience: -1.0 }
     } else {
         SamplingStrategy::Greedy { best_of: 1 }
+    }
+}
+
+/// Accélérateur que whisper.cpp retiendra (même règle que `whisper_backend_init_gpu` : premier
+/// périphérique ggml de type GPU), ex. `("Vulkan", "NVIDIA GeForce RTX 5050")`. `None` : CPU seul,
+/// soit parce qu'aucun backend GPU n'est compilé, soit parce qu'aucun périphérique n'est présent
+/// (Vulkan sans pilote ICD, ou seulement un pilote logiciel type lavapipe, que ggml ignore).
+pub fn acceleration() -> Option<(String, String)> {
+    use std::ffi::CStr;
+    use whisper_rs::whisper_rs_sys as sys;
+    let text = |p: *const std::os::raw::c_char| {
+        if p.is_null() {
+            String::new()
+        } else {
+            // SAFETY : chaînes C statiques détenues par le registre ggml.
+            unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
+        }
+    };
+    // SAFETY : API C du registre ggml, initialisée à la première utilisation et jamais libérée.
+    unsafe {
+        (0..sys::ggml_backend_dev_count()).find_map(|i| {
+            let dev = sys::ggml_backend_dev_get(i);
+            if dev.is_null() || sys::ggml_backend_dev_type(dev) != sys::ggml_backend_dev_type_GGML_BACKEND_DEVICE_TYPE_GPU {
+                return None;
+            }
+            let backend = text(sys::ggml_backend_reg_name(sys::ggml_backend_dev_backend_reg(dev)));
+            Some((backend, text(sys::ggml_backend_dev_description(dev)).trim().to_string()))
+        })
+    }
+}
+
+/// Flash attention selon le backend. Désactivée sur Vulkan : whisper.cpp ne prévoit pas le
+/// remplissage du cache KV qu'elle exige pour ce backend (`whisper_kv_cache_get_padding`, prévu pour
+/// Metal et CUDA seulement), d'où des transcriptions dégradées (mots répétés, phrases tronquées),
+/// mesurées sur RTX 5060 (Dozen) et lavapipe. Sans elle, Vulkan retrouve la qualité du CPU.
+fn flash_attn_ok(backend: Option<&str>) -> bool {
+    !backend.is_some_and(|b| b.eq_ignore_ascii_case("vulkan"))
+}
+
+/// Libellé lisible : « Vulkan · NVIDIA GeForce RTX 5050 », ou « Processeur ».
+pub fn acceleration_label() -> String {
+    match acceleration() {
+        Some((backend, device)) if device.is_empty() => backend,
+        Some((backend, device)) => format!("{backend} · {device}"),
+        None => "Processeur".into(),
     }
 }
 
@@ -29,10 +74,13 @@ pub struct LocalEngine {
     ctx: WhisperContext,
     path: PathBuf,
     threads: i32,
+    /// Un GPU est utilisé (Metal, CUDA, Vulkan) : décodage beam search.
+    gpu: bool,
 }
 
 impl LocalEngine {
-    /// Charge le modèle (GPU activé : Metal sur macOS, CUDA/Vulkan si compilés). Lourd.
+    /// Charge le modèle (GPU activé : Metal sur macOS, CUDA/Vulkan si compilés et un périphérique
+    /// est présent, sinon repli CPU par whisper.cpp). Lourd.
     pub fn load(model_path: &Path) -> anyhow::Result<LocalEngine> {
         // Redirige les journaux de whisper.cpp/ggml (sinon imprimés sur stderr).
         LOG_HOOK.call_once(whisper_rs::install_logging_hooks);
@@ -43,15 +91,23 @@ impl LocalEngine {
         if !model_path.is_file() {
             anyhow::bail!("Modèle introuvable : {}", model_path.display());
         }
+        let accel = acceleration();
         let mut params = WhisperContextParameters::default();
         params.use_gpu(true);
-        params.flash_attn(true);
+        params.flash_attn(flash_attn_ok(accel.as_ref().map(|(backend, _)| backend.as_str())));
         let ctx = WhisperContext::new_with_params(path_str, params)
             .map_err(|e| anyhow!("Chargement du modèle impossible ({}) : {e}", model_path.display()))?;
 
         let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
         let threads = cores.clamp(1, 8) as i32;
-        let engine = LocalEngine { ctx, path: model_path.to_path_buf(), threads };
+        match &accel {
+            Some((backend, device)) => log::info!("Accélération : {backend} ({device})"),
+            None if cfg!(any(feature = "cuda", feature = "vulkan")) => {
+                log::warn!("Accélération : aucun GPU utilisable, transcription sur le processeur")
+            }
+            None => log::info!("Accélération : aucune, transcription sur le processeur"),
+        }
+        let engine = LocalEngine { ctx, path: model_path.to_path_buf(), threads, gpu: accel.is_some() };
 
         // Chauffe : le tout premier passage compile les shaders GPU (jusqu'à ~13 s sur
         // Metal après une mise à jour du binaire). On le paie ici plutôt qu'à la 1re dictée.
@@ -74,7 +130,7 @@ impl LocalEngine {
 
     /// Transcrit un signal mono 16 kHz f32. Un état whisper neuf est créé à chaque appel.
     pub fn transcribe(&self, samples: &[f32], opts: &TranscribeOptions) -> anyhow::Result<String> {
-        self.transcribe_with(samples, opts, default_strategy())
+        self.transcribe_with(samples, opts, default_strategy(self.gpu))
     }
 
     pub(crate) fn transcribe_with(
@@ -153,11 +209,35 @@ mod tests {
         r.into_samples::<i16>().map(|s| f32::from(s.unwrap()) / 32768.0).collect()
     }
 
+    /// Modèle des tests d'intégration : `MURMURE_TEST_MODEL`, sinon large-v3-turbo de `~/.whisper/models`.
+    fn test_model() -> PathBuf {
+        std::env::var_os("MURMURE_TEST_MODEL")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| dirs::home_dir().unwrap().join(".whisper/models/ggml-large-v3-turbo.bin"))
+    }
+
+    #[test]
+    fn flash_attention_coupee_sur_vulkan() {
+        assert!(flash_attn_ok(None));
+        assert!(flash_attn_ok(Some("Metal")));
+        assert!(flash_attn_ok(Some("CUDA")));
+        assert!(!flash_attn_ok(Some("Vulkan")));
+    }
+
+    /// L'interrogation du registre ggml ne plante jamais, avec ou sans GPU (Vulkan sans pilote ICD compris).
+    #[test]
+    fn acceleration_detectee_sans_panique() {
+        let label = acceleration_label();
+        println!("Accélération : {label}");
+        assert!(!label.is_empty());
+        assert_eq!(acceleration().is_none(), label == "Processeur");
+    }
+
     /// `MURMURE_TEST_WAV=/chemin.wav cargo test --lib engine::local -- --ignored --nocapture`
     #[test]
     #[ignore = "nécessite ~/.whisper/models/ggml-large-v3-turbo.bin et un WAV de test"]
     fn integration_transcription_locale() {
-        let model = dirs::home_dir().unwrap().join(".whisper/models/ggml-large-v3-turbo.bin");
+        let model = test_model();
         let wav = std::env::var("MURMURE_TEST_WAV").unwrap_or_else(|_| "/tmp/murmure-test.wav".into());
         let samples = read_wav(Path::new(&wav));
 
@@ -204,7 +284,7 @@ mod tests {
     #[test]
     #[ignore = "nécessite ~/.whisper/models/ggml-large-v3-turbo.bin et un dossier de WAV"]
     fn corpus_ponctuation() {
-        let model = dirs::home_dir().unwrap().join(".whisper/models/ggml-large-v3-turbo.bin");
+        let model = test_model();
         let dir = std::env::var("MURMURE_PUNCT_DIR").expect("MURMURE_PUNCT_DIR");
         let mut wavs: Vec<_> = std::fs::read_dir(&dir)
             .unwrap()
@@ -212,11 +292,17 @@ mod tests {
             .filter(|p| p.extension().is_some_and(|e| e == "wav"))
             .collect();
         wavs.sort();
+        // RUST_LOG=info : journaux whisper.cpp/ggml (périphérique retenu) et ligne « Accélération ».
+        let _ = env_logger::builder().is_test(true).try_init();
+        let t = Instant::now();
         let engine = LocalEngine::load(&model).unwrap();
+        println!("chargement + chauffe : {} ms", t.elapsed().as_millis());
         let prompt = std::env::var("MURMURE_PUNCT_PROMPT").ok();
         let opts = TranscribeOptions { language: Some("fr".into()), initial_prompt: prompt };
         for wav in wavs {
+            let t = Instant::now();
             let raw = engine.transcribe(&read_wav(&wav), &opts).unwrap();
+            println!("{} : {} ms", wav.file_name().unwrap().to_string_lossy(), t.elapsed().as_millis());
             println!("{} brut  : {raw}", wav.file_name().unwrap().to_string_lossy());
             let name = wav.file_name().unwrap().to_string_lossy().into_owned();
             println!("{name} final : {}", crate::punctuation::apply_fr(&raw).replace('\n', "⏎"));
