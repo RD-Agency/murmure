@@ -237,6 +237,12 @@ jobs:
           PY
             cat "$RUNNER_TEMP/vulkan.conf.json"
             ARGS+=(--features vulkan --bundles deb,rpm --config "$RUNNER_TEMP/vulkan.conf.json")
+          elif [ "${{ matrix.suffix }}" = "linux-x64" ]; then
+            # AppImage : le webkit2gtk embarqué (Ubuntu 22.04) exige FreeType ≥ 2.11, que linuxdeploy n'embarque
+            # pas ; openSUSE Leap 15.6 n'a que la 2.10 (symbole FT_Get_Color_Glyph_Paint absent). On l'ajoute.
+            echo '{"bundle":{"linux":{"appimage":{"files":{"/usr/lib/libfreetype.so.6":"/usr/lib/x86_64-linux-gnu/libfreetype.so.6"}}}}}' \
+              > "$RUNNER_TEMP/appimage.conf.json"
+            ARGS+=(--config "$RUNNER_TEMP/appimage.conf.json")
           fi
           pnpm tauri build "${ARGS[@]}"
 
