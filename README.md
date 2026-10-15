@@ -119,9 +119,19 @@ de sortie fait foi.
 
 - **macOS** : Micro, et Accessibilité pour coller dans les autres apps. L'onboarding ouvre les bons panneaux.
 - **Linux X11** : rien de spécial (`xdotool` conseillé).
-- **Linux Wayland** : le collage passe par `wtype` ou `ydotool`. Le raccourci global n'est pas capté sous Wayland :
-  liez un raccourci du bureau (KDE : Réglages › Raccourcis) à la commande `murmure --toggle`.
-  KDE (KWin) ne gère pas le protocole de `wtype` : utilisez `ydotool` (accès à `/dev/uinput` + démon utilisateur) :
+- **Linux Wayland** (KDE Plasma ≥ 5.27, GNOME ≥ 48) : Murmure passe par les portails XDG. Au premier lancement
+  (étape « Autoriser Murmure » ou Réglages › Raccourci), le bureau demande **une seule fois** :
+  1. le **raccourci global** (portail GlobalShortcuts) — on peut y choisir une autre touche ; le raccourci attribué
+     s'affiche dans Réglages › Raccourci, « Modifier… » rouvre le réglage du bureau ;
+  2. le **contrôle du clavier** (portail RemoteDesktop) — uniquement pour taper Ctrl+V ; l'accord est mémorisé.
+
+  Collage : portail → `ydotool` (si `ydotoold` tourne) → `wtype` → à défaut le texte est copié et une notification
+  invite à coller avec Ctrl+V. Si le portail des raccourcis est absent ou refusé : liez un raccourci KDE
+  (Configuration du système › Clavier › Raccourcis › Ajouter nouveau › Commande ou script) à `murmure --toggle`.
+  Échap n'annule pas une dictée sous Wayland (pas de capture globale).
+
+  Repli sans portail (bureau trop ancien, autorisation refusée) : KDE (KWin) ne gère pas le protocole de `wtype`,
+  utilisez `ydotool` (accès à `/dev/uinput` + démon utilisateur) :
 
   ```bash
   sudo zypper install -y ydotool        # Fedora : sudo dnf install -y ydotool
@@ -133,7 +143,7 @@ de sortie fait foi.
   systemctl --user daemon-reload && systemctl --user enable --now ydotool
   ```
 
-  Le plus simple reste la session « Plasma (X11) » à l'écran de connexion quand elle existe
+  Autre repli : la session « Plasma (X11) » à l'écran de connexion quand elle existe
   (openSUSE Leap 16 / Tumbleweed : `sudo zypper install -y plasma6-session-x11`).
 
 ## Serveur

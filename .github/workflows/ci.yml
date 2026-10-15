@@ -81,6 +81,52 @@ jobs:
           cargo clippy --all-targets --features vulkan -- -D warnings
           cargo test --lib --features vulkan -- --show-output
 
+  linux-package:
+    # Paquets .rpm / .deb de test pour chaque PR (artefact « murmure-linux-pr-N ») : à installer
+    # sur une vraie machine (KDE Wayland…) avant de fusionner. Non signés pour la mise à jour auto.
+    name: Paquet Linux de test
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-22.04
+    env:
+      # Binaire portable (pas de -march=native dans ggml), comme la release.
+      SOURCE_DATE_EPOCH: "1700000000"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Dépendances système
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            libasound2-dev libxdo-dev libssl-dev cmake clang rpm
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: linux-package
+      - run: pnpm install --frozen-lockfile
+      - name: Build (.deb, .rpm)
+        # Pas de clé de signature en PR : artefacts de mise à jour désactivés.
+        run: pnpm tauri build --bundles deb,rpm --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      - name: Rassembler
+        run: |
+          mkdir -p out
+          cp src-tauri/target/release/bundle/rpm/*.rpm src-tauri/target/release/bundle/deb/*.deb out/
+          (cd out && sha256sum * > SHA256SUMS.txt)
+          ls -lh out
+          echo "### Paquets de test" >> "$GITHUB_STEP_SUMMARY"
+          sed 's/^/    /' out/SHA256SUMS.txt >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: murmure-linux-pr-${{ github.event.pull_request.number }}
+          path: out/
+          retention-days: 30
+
   server:
     name: Serveur
     runs-on: ubuntu-latest

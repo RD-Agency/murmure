@@ -15,6 +15,7 @@ import { Logo } from "../components/Logo";
 import { PermissionsPanel } from "../components/PermissionsPanel";
 import { Progress } from "../components/Progress";
 import { RemoteForm } from "../components/RemoteForm";
+import { TriggerKeys, useWayland, WaylandPanel } from "../components/WaylandPanel";
 import { on } from "../lib/api";
 import { downloadPercent, formatProgressSize, formatSize, hotkeyLabel } from "../lib/format";
 import type { DictationState, EngineKind, Platform } from "../lib/types";
@@ -29,6 +30,7 @@ export function Onboarding() {
   const update = useApp((s) => s.updateSettings);
   const flush = useApp((s) => s.flushSettings);
   const models = useApp((s) => s.models);
+  const wayland = useWayland();
   const [step, setStep] = useState<Step>("welcome");
   const [dir, setDir] = useState<1 | -1>(1);
 
@@ -109,21 +111,28 @@ export function Onboarding() {
           className="w-full max-w-[540px]"
           style={{ animation: `${dir === 1 ? "ob-in-right" : "ob-in-left"} 360ms cubic-bezier(0.2, 0.8, 0.2, 1) both` }}
         >
-          {step === "welcome" && <Welcome platform={platform} hotkey={settings.hotkey} />}
+          {step === "welcome" && <Welcome platform={platform} hotkey={settings.hotkey} wayland={!!wayland} />}
           {step === "engine" && <EngineChoice value={settings.engine} onChange={(engine) => update({ engine })} />}
           {step === "setup" && (settings.engine === "local" ? <LocalSetup /> : <RemoteSetup />)}
           {step === "permissions" && (
             <StepFrame
-              title="Deux autorisations"
+              title={wayland ? "Autoriser Murmure" : "Deux autorisations"}
               text={
                 platform === "macos"
                   ? "Murmure a besoin d'entendre votre voix et de coller le texte dans l'application active."
-                  : "Murmure a besoin d'accéder à votre microphone."
+                  : wayland
+                    ? "Sous Wayland, le bureau vous demande deux accords, une seule fois : un raccourci clavier global pour dicter, et le droit de coller le texte (Ctrl+V) dans l'application active."
+                    : "Murmure a besoin d'accéder à votre microphone."
               }
             >
               <div className="overflow-hidden rounded-xl border border-line bg-surface shadow-soft">
                 <PermissionsPanel platform={platform} />
               </div>
+              {wayland && (
+                <div className="mt-3 overflow-hidden rounded-xl border border-line bg-surface shadow-soft">
+                  <WaylandPanel status={wayland} />
+                </div>
+              )}
               <p className="mt-3 text-center text-[12px] text-subtle">Le statut se met à jour automatiquement.</p>
             </StepFrame>
           )}
@@ -158,7 +167,7 @@ function StepFrame({ title, text, children }: { title: string; text?: ReactNode;
 
 // ---------- Étapes ----------
 
-function Welcome({ platform, hotkey }: { platform: Platform; hotkey: string }) {
+function Welcome({ platform, hotkey, wayland }: { platform: Platform; hotkey: string; wayland: boolean }) {
   return (
     <div className="flex flex-col items-center text-center">
       <div className="mb-7">
@@ -168,10 +177,12 @@ function Welcome({ platform, hotkey }: { platform: Platform; hotkey: string }) {
       <p className="mt-3 max-w-[400px] text-[14.5px] leading-relaxed text-muted">
         Dictez partout. Maintenez un raccourci, parlez, relâchez : le texte apparaît là où se trouve votre curseur.
       </p>
-      <div className="mt-9 flex items-center gap-3 text-[13px] text-subtle">
-        <HotkeyKeys accelerator={hotkey} platform={platform} />
-        <span>puis parlez</span>
-      </div>
+      {!wayland && (
+        <div className="mt-9 flex items-center gap-3 text-[13px] text-subtle">
+          <HotkeyKeys accelerator={hotkey} platform={platform} />
+          <span>puis parlez</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -369,6 +380,7 @@ function TryIt() {
   const [state, setState] = useState<{ state: DictationState; message?: string; hands_free?: boolean }>({ state: "idle" });
   const [success, setSuccess] = useState(false);
   const [editing, setEditing] = useState(false);
+  const wayland = useWayland();
 
   useEffect(() => {
     ref.current?.focus();
@@ -389,13 +401,26 @@ function TryIt() {
     };
   }, []);
 
-  const label = useMemo(() => hotkeyLabel(settings.hotkey, platform), [settings.hotkey, platform]);
+  const waylandTrigger = wayland?.shortcut === "active" ? wayland.shortcut_trigger : null;
+  const label = useMemo(
+    () => (wayland ? (waylandTrigger ?? "le raccourci") : hotkeyLabel(settings.hotkey, platform)),
+    [wayland, waylandTrigger, settings.hotkey, platform],
+  );
   const live = state.state === "error" ? state.message ?? "Erreur" : LIVE_LABEL[state.state];
 
   return (
     <StepFrame title="Essayez" text="Cliquez dans le champ ci-dessous, maintenez le raccourci et parlez. Relâchez pour insérer le texte.">
       <div className="mb-6 flex flex-col items-center gap-3">
-        {editing ? (
+        {wayland ? (
+          waylandTrigger ? (
+            <TriggerKeys trigger={waylandTrigger} size="lg" />
+          ) : (
+            <p className="text-center text-[12.5px] text-muted">
+              Aucun raccourci attribué : revenez à l'étape précédente pour autoriser Murmure, ou utilisez le raccourci de
+              secours (Réglages › Raccourci).
+            </p>
+          )
+        ) : editing ? (
           <HotkeyRecorder
             value={settings.hotkey}
             platform={platform}

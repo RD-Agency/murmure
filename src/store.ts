@@ -10,6 +10,7 @@ import type {
   UpdateInfo,
   UpdateProgress,
   View,
+  WaylandStatus,
 } from "./lib/types";
 
 export type SaveStatus = "idle" | "saving" | "saved" | "error";
@@ -37,6 +38,8 @@ interface AppState {
   history: HistoryEntry[];
   hasApiKey: boolean;
   update: UpdateSlice;
+  /** Linux Wayland : état des portails (null hors Tauri/avant init). */
+  wayland: WaylandStatus | null;
 
   init: () => Promise<void>;
   setView: (v: View) => void;
@@ -73,6 +76,7 @@ export const useApp = create<AppState>((set, get) => ({
   history: [],
   hasApiKey: false,
   update: { status: "idle", available: null, progress: null, error: null },
+  wayland: null,
 
   init: async () => {
     if (initialized) return;
@@ -83,6 +87,7 @@ export const useApp = create<AppState>((set, get) => ({
       if (!pendingLocal) set({ settings: s });
     });
     on("navigate", (v) => set({ view: v }));
+    on("wayland-status", (wayland) => set({ wayland }));
     on("update-available", (info) =>
       set((st) =>
         st.update.status === "installing"
@@ -124,6 +129,10 @@ export const useApp = create<AppState>((set, get) => ({
       }
     });
 
+    void api
+      .getWaylandStatus()
+      .then((wayland) => set({ wayland }))
+      .catch(() => undefined);
     const [platform, settings, models, history, hasApiKey, running] = await Promise.all([
       api.getPlatform().catch(() => "macos" as Platform),
       api.getSettings(),

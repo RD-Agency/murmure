@@ -1,0 +1,4 @@
+# Compilation Linux x86_64 de Murmure (mêmes dépendances que la CI).
+FROM rust:1-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libasound2-dev libxdo-dev \
+      libdbus-1-dev clang cmake libssl-dev libappindicator3-dev librsvg2-dev && rm -rf /var/lib/apt/lists/*

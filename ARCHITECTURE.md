@@ -27,6 +27,8 @@ src-tauri/src/
   pipeline.rs           start/stop/cancel → audio → moteur → injection → historique  [agent système]
   hotkey.rs             Raccourci global (hold / toggle / hybride)                   [agent système]
   inject.rs             Collage dans l'app active (presse-papiers + Cmd/Ctrl+V)      [agent système]
+  wayland.rs            Détection de session Wayland, état des portails, conversions pures
+  portal.rs             Linux : portails XDG GlobalShortcuts + RemoteDesktop (ashpd/zbus)
   overlay.rs            Positionnement / affichage de la fenêtre overlay             [agent système]
   tray.rs               Icône de barre de menus                                      [agent système]
   permissions.rs        Micro / Accessibilité (macOS)                                [agent système]
@@ -60,7 +62,8 @@ server/                 Serveur FastAPI + faster-whisper, Docker CUDA/CPU       
   "sounds": true,
   "launch_at_login": false,
   "history_enabled": true,
-  "onboarding_done": false
+  "onboarding_done": false,
+  "wayland_restore_token": null            // Linux Wayland : jeton du portail RemoteDesktop (géré par Rust)
 }
 ```
 
@@ -95,6 +98,10 @@ Noms snake_case côté Rust, arguments camelCase côté JS (convention Tauri). E
 | `get_acceleration` | — | `string` : « Metal · Apple M2 », « Vulkan · NVIDIA GeForce RTX 5050 », « CUDA · … » ou « Processeur » |
 | `check_update` | — | `UpdateInfo \| null` : `null` si à jour ou manifeste absent (404) ; erreur si réseau injoignable. Toujours `null` en dev |
 | `install_update` | — | `()` : télécharge (`update-progress`), installe puis relance l'app (ne rend pas la main en cas de succès). Refusé pendant une dictée |
+| `get_wayland_status` | — | `WaylandStatus` (`wayland: false` hors session Wayland) |
+| `wayland_authorize` | — | `WaylandStatus` : demandes de portail raccourci + clavier (boîtes de dialogue du bureau) |
+| `wayland_configure_shortcut` | — | `()` : ouvre le réglage du raccourci du bureau (`ConfigureShortcuts`, portail v2) |
+| `wayland_refresh` | — | `WaylandStatus` : relit le raccourci attribué (`ListShortcuts`) et l'outil de secours |
 
 ## Événements (Rust → front, `emit` global)
 
@@ -108,6 +115,7 @@ Noms snake_case côté Rust, arguments camelCase côté JS (convention Tauri). E
 | `navigate` | `"home" \| "history" \| "settings"` (depuis le tray) |
 | `update-available` | `UpdateInfo` — vérification de fond ou `check_update` |
 | `update-progress` | `{ downloaded, total }` octets cumulés (`total` = 0 si inconnu), ~10 Hz |
+| `wayland-status` | `WaylandStatus`, à chaque changement d'état des portails |
 
 ## Types
 
@@ -122,6 +130,11 @@ type DownloadStatus = { id: string; downloaded: number; total: number };
 type Permissions   = { microphone: "granted" | "denied" | "undetermined" | "unknown";
                        accessibility: "granted" | "denied" | "unknown" };
 type UpdateInfo    = { version: string; notes: string | null };
+type PortalState   = "inactive" | "pending" | "active" | "denied" | "unavailable";
+type WaylandStatus = { wayland: boolean; shortcut: PortalState; shortcut_trigger: string | null;
+                       shortcut_configurable: boolean; shortcut_error: string | null;
+                       keyboard: PortalState; keyboard_error: string | null;
+                       paste_fallback: "ydotool" | "wtype" | null };
 ```
 
 ## API Rust entre modules (à respecter à la lettre)
@@ -226,6 +239,43 @@ pub fn encode_wav(samples: &[f32]) -> Vec<u8>;                     // PCM 16 bit
 - Mode démo navigateur : `?update` simule une 0.2.0 disponible, `?update=ready` une 0.2.0 prête, `?update=error`
   un serveur injoignable.
 
+## Wayland (`wayland.rs`, `portal.rs`)
+
+Sous Wayland, `tauri-plugin-global-shortcut` (X11) ne reçoit rien et enigo/xdotool n'atteignent pas les fenêtres
+natives. Murmure passe par les portails XDG (crate `ashpd`, D-Bus pur Rust via `zbus`, runtime tokio de Tauri).
+
+- **Détection** : `XDG_SESSION_TYPE=wayland`, ou `WAYLAND_DISPLAY` défini sans `XDG_SESSION_TYPE=x11` explicite.
+  X11, macOS, Windows : rien ne change (plugin global-shortcut, enigo).
+- **App id** : une app hors bac à sable n'en a pas pour le portail (sauf lancée par le bureau dans une unité
+  `app-Murmure@….service`) ; sans app id, KDE crée un composant `token_…` à chaque lancement et redemande le
+  raccourci. Au premier appel, `org.freedesktop.host.portal.Registry.Register("Murmure")` (xdg-desktop-portal ≥ 1.19)
+  sur la connexion partagée ; il exige `Murmure.desktop` (paquets .deb/.rpm), créé dans `~/.local/share/applications`
+  s'il manque (AppImage). Échec = best effort, on continue.
+- **Raccourci** (`org.freedesktop.portal.GlobalShortcuts`, KDE Plasma ≥ 5.27, GNOME ≥ 48) : `CreateSession`, puis
+  `BindShortcuts` d'un raccourci `dictation`, `preferred_trigger` dérivé du réglage
+  (`wayland::accelerator_to_portal` : `Ctrl+Alt+Space` → `CTRL+ALT+space`). KDE n'ouvre sa boîte de dialogue que
+  pour un raccourci nouveau ; l'utilisateur peut y choisir une autre touche. `Activated` → appui, `Deactivated` →
+  relâchement, injectés dans `hotkey::on_key_event` : modes hybride / maintien / bascule identiques à X11.
+  Le raccourci attribué est relu (réponse de `BindShortcuts`, `ListShortcuts` au retour du focus, signal
+  `ShortcutsChanged`) et affiché dans Réglages › Raccourci ; « Modifier… » appelle `ConfigureShortcuts` (v2).
+  Le réglage `hotkey` n'est alors qu'une préférence initiale : `hotkey::apply` n'enregistre rien côté X11 (sinon
+  double appui dans les fenêtres XWayland). Échap n'est pas capté globalement sous Wayland.
+- **Collage** (`org.freedesktop.portal.RemoteDesktop`) : clavier seul, `persist_mode` = 2 (jusqu'à révocation),
+  `restore_token` dans `wayland_restore_token` (à usage unique : remplacé à chaque démarrage de session) → la
+  boîte de dialogue n'apparaît qu'une fois. Ctrl+V = `NotifyKeyboardKeysym` (`Control_L`, `v`), indépendant de la
+  disposition. Session fermée par le bureau → état `inactive`, repli.
+- **Ordre de collage** (`inject::paste_plan`, testé) : portail → `ydotool` (si le socket de `ydotoold` répond) →
+  `wtype` (refusé par KWin) → copie seule + notification du bureau « Texte copié » et message dans la pastille.
+- **Presse-papiers** : `arboard` avec `wayland-data-control` (wl-clipboard-rs : `ext-data-control-v1` et
+  `zwlr-data-control-v1`, KWin et wlroots ; repli X11 via XWayland sinon, ex. GNOME). Le contenu est servi par un
+  thread de fond tant que Murmure tourne : il reste disponible pour le collage et après.
+- **Quand les demandes apparaissent** : au démarrage, le raccourci est rebranché si l'onboarding est terminé (pas
+  de dialogue s'il est déjà accordé) et la session clavier restaurée si un jeton existe. Sinon, bouton « Autoriser
+  Murmure » (onboarding, étape autorisations ; Réglages › Raccourci) → `wayland_authorize`.
+- **Repli** : portail absent ou refusé → `murmure --toggle` lié à un raccourci KDE (procédure affichée dans
+  Réglages › Raccourci). Ce mode est une bascule (pas de relâchement).
+- **Mode démo** : `?wayland` simule une session Wayland, `?wayland=deny` un refus.
+
 ## Ponctuation dictée (`punctuation.rs`)
 
 - Réglage `spoken_punctuation` (défaut : activé), actif si la langue est `fr` ou `auto` : « virgule », « point »,
@@ -247,7 +297,7 @@ raccourci relâché ─► (hybride : appui < 300 ms → mains libres, on attend
                   ─► LocalEngine/RemoteEngine::transcribe (thread bloquant / async)
                   ─► texte nettoyé (trim, espaces) ─► inject::paste(texte) ─► historique
                   ─► dictation-result, state=idle, overlay masqué
-Échap pendant l'enregistrement ─► cancel_dictation
+Échap pendant l'enregistrement ─► cancel_dictation (X11, macOS, Windows)
 Enregistrement < 250 ms ou silence ─► abandon silencieux
 ```
 

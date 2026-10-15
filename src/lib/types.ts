@@ -27,6 +27,8 @@ export interface Settings {
   launch_at_login: boolean;
   history_enabled: boolean;
   onboarding_done: boolean;
+  /** Linux Wayland : jeton du portail RemoteDesktop, géré par Rust (ignoré à l'enregistrement). */
+  wayland_restore_token: string | null;
 }
 
 export interface AudioDevice {
@@ -97,6 +99,24 @@ export interface UpdateProgress {
   total: number;
 }
 
+/** État d'une autorisation de portail XDG (Wayland). */
+export type PortalState = "inactive" | "pending" | "active" | "denied" | "unavailable";
+
+/** Linux Wayland : raccourci global (GlobalShortcuts) et collage (RemoteDesktop) via les portails. */
+export interface WaylandStatus {
+  wayland: boolean;
+  shortcut: PortalState;
+  /** Raccourci réellement attribué par le bureau (ex. « Ctrl+Alt+Espace »). */
+  shortcut_trigger: string | null;
+  /** Le bureau sait ouvrir son réglage du raccourci (ConfigureShortcuts). */
+  shortcut_configurable: boolean;
+  shortcut_error: string | null;
+  keyboard: PortalState;
+  keyboard_error: string | null;
+  /** Outil de collage de secours détecté. */
+  paste_fallback: "ydotool" | "wtype" | null;
+}
+
 /** Événements Rust → front et leur payload. */
 export interface EventMap {
   "dictation-state": DictationStatePayload;
@@ -109,6 +129,7 @@ export interface EventMap {
   /** Mise à jour téléchargée et en place : appliquée au prochain redémarrage (automatique). */
   "update-ready": UpdateInfo;
   "update-progress": UpdateProgress;
+  "wayland-status": WaylandStatus;
 }
 
 export type EventName = keyof EventMap;
@@ -141,6 +162,10 @@ export interface CommandMap {
   get_acceleration: { args: undefined; ret: string };
   check_update: { args: undefined; ret: UpdateInfo | null };
   install_update: { args: undefined; ret: void };
+  get_wayland_status: { args: undefined; ret: WaylandStatus };
+  wayland_authorize: { args: undefined; ret: WaylandStatus };
+  wayland_configure_shortcut: { args: undefined; ret: void };
+  wayland_refresh: { args: undefined; ret: WaylandStatus };
 }
 
 export type CommandName = keyof CommandMap;

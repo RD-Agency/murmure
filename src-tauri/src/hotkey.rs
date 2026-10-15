@@ -1,7 +1,9 @@
 //! Raccourci global : modes maintien (push-to-talk), bascule et hybride.
 //!
 //! La logique de décision ([`HotkeyMachine`]) est pure et testée sans Tauri ;
-//! le reste câble `tauri-plugin-global-shortcut` et la file de commandes du pipeline.
+//! le reste câble `tauri-plugin-global-shortcut` (X11, macOS, Windows) et la file de commandes
+//! du pipeline. Sous Wayland, le raccourci vient du portail GlobalShortcuts (`portal.rs`) qui
+//! appelle [`on_key_event`] : même machine d'états, mêmes modes.
 
 use crate::pipeline::{self, Command};
 use crate::settings::HotkeyMode;
@@ -106,6 +108,11 @@ fn handle_main_shortcut(app: &AppHandle, event: ShortcutEvent) {
         ShortcutState::Pressed => KeyEvent::Pressed,
         ShortcutState::Released => KeyEvent::Released,
     };
+    on_key_event(app, ev);
+}
+
+/// Appui / relâchement du raccourci principal, quelle que soit sa source (plugin X11 ou portail).
+pub fn on_key_event(app: &AppHandle, ev: KeyEvent) {
     let Some(state) = app.try_state::<AppState>() else { return };
     let mode = state.settings.lock().hotkey_mode;
     let recording = state.is_recording();
@@ -145,9 +152,22 @@ pub fn validate(accelerator: &str) -> Result<(), String> {
     parse(accelerator).map(|_| ())
 }
 
+/// Remet la machine d'états au repos (nouveau raccourci, nouvelle session de portail).
+pub fn reset_machine(app: &AppHandle) {
+    if let Some(s) = app.try_state::<AppState>() {
+        s.hotkey.lock().reset();
+    }
+}
+
 /// (Ré)enregistre le raccourci principal. En cas d'échec, l'ancien est restauré.
+///
+/// Sous Wayland, le raccourci est géré par le portail (et modifiable seulement dans le bureau) :
+/// on n'enregistre rien côté X11, sans quoi une fenêtre XWayland active recevrait l'appui deux fois.
 pub fn apply(app: &AppHandle, accelerator: &str) -> Result<(), String> {
     let new = parse(accelerator)?;
+    if crate::wayland::is_wayland_session() {
+        return Ok(());
+    }
     let gs = app.global_shortcut();
     let registered = app.state::<Registered>();
     let mut current = registered.0.lock();
@@ -160,9 +180,7 @@ pub fn apply(app: &AppHandle, accelerator: &str) -> Result<(), String> {
     {
         log::warn!("désenregistrement de l'ancien raccourci : {e}");
     }
-    if let Some(s) = app.try_state::<AppState>() {
-        s.hotkey.lock().reset();
-    }
+    reset_machine(app);
     let result = gs.on_shortcut(new, |app, _shortcut, event| handle_main_shortcut(app, event));
     match result {
         Ok(()) => {

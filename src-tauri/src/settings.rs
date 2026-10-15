@@ -57,6 +57,9 @@ pub struct Settings {
     pub launch_at_login: bool,
     pub history_enabled: bool,
     pub onboarding_done: bool,
+    /// Linux Wayland : jeton de restauration du portail RemoteDesktop (collage), géré par Rust
+    /// uniquement — la valeur envoyée par le front est ignorée par `save_settings`.
+    pub wayland_restore_token: Option<String>,
 }
 
 /// Raccourci par défaut : Option+Espace sur macOS, Ctrl+Alt+Espace ailleurs
@@ -88,6 +91,7 @@ impl Default for Settings {
             launch_at_login: false,
             history_enabled: true,
             onboarding_done: false,
+            wayland_restore_token: None,
         }
     }
 }
@@ -194,6 +198,7 @@ mod tests {
         assert!(s.restore_clipboard && s.sounds && s.history_enabled);
         assert!(!s.launch_at_login && !s.onboarding_done);
         assert!(s.input_device.is_none());
+        assert!(s.wayland_restore_token.is_none());
         assert!(s.initial_prompt.is_empty() && s.remote_endpoint.is_empty());
         if cfg!(target_os = "macos") {
             assert_eq!(s.hotkey, "Alt+Space");
