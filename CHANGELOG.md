@@ -5,6 +5,13 @@
 - Dictées de plus de 30 s : le moteur local ne perd plus de mots à la jonction des fenêtres de
   Whisper (WER de 16,6 % à 9,1 % sur des dictées de 35 à 48 s, RTX 5060). Les dictées plus courtes
   ne changent pas.
+- Moteur local : la dictée est transcrite par segments pendant l'enregistrement, coupés sur les pauses.
+  Au relâchement, il ne reste que la fin à transcrire. Pour une dictée de 35 à 48 s, l'attente passe
+  de 1,3 s à 0,3 s avec une RTX 5060, et de 13,8 s à 6,9 s sur processeur (Ryzen 9 9950X, 8 threads).
+  La ponctuation dictée s'applique au texte complet, y compris à une commande prononcée de part et
+  d'autre d'une pause, et Échap annule aussi les segments en cours. Le moteur Serveur envoie toujours
+  la dictée d'un bloc.
+- Ponctuation dictée : « point. À la ligne » donne bien un point suivi d'un retour à la ligne.
 - Textes courts : pour trois mots ou moins, plus de point final ni de majuscule imposée en tête (réglage
   activé par défaut). Un point dicté, un sigle ou un mot du vocabulaire gardent leur forme.
 - Arrêt automatique sur silence en bascule et en mains libres : la dictée se termine après 2 s de silence

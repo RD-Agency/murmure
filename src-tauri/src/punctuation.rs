@@ -72,7 +72,7 @@ static COMMANDS: Lazy<Vec<(Regex, Mark)>> = Lazy::new(|| {
         (re, mark)
     };
     vec![
-        cmd(r"point,?\s+(?:et\s+)?à\s+la\s+ligne", Mark::PeriodNewline),
+        cmd(r"point[,.]?\s+(?:et\s+)?à\s+la\s+ligne", Mark::PeriodNewline),
         cmd(r"nouveau\s+paragraphe|nouvel\s+alinéa|saut\s+de\s+paragraphe", Mark::Paragraph),
         cmd(r"(?:retour|passez|passer|aller)\s+à\s+la\s+ligne|à\s+la\s+ligne|nouvelle\s+ligne", Mark::Newline),
         cmd(r"points?\s+d'interrogation", Mark::Question),
@@ -287,6 +287,15 @@ mod tests {
             "Qu'il n'a jamais reçu la mise en demeure ». Est-ce exact ?"
         );
         assert_eq!(apply_fr("On fait le point, puis on avance."), "On fait le point, puis on avance.");
+    }
+
+    /// Whisper termine souvent un segment par « Point. » et commence le suivant par « À la ligne ».
+    #[test]
+    fn point_puis_a_la_ligne_separes_par_un_point() {
+        assert_eq!(
+            apply_fr("Je vous écris au sujet du dossier Durand. Point. À la ligne, je reste à votre disposition."),
+            "Je vous écris au sujet du dossier Durand.\nJe reste à votre disposition."
+        );
     }
 
     #[test]
