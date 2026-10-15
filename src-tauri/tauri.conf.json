@@ -70,11 +70,19 @@
         "depends": [
           "xdotool",
           "libxdo3"
+        ],
+        "recommends": [
+          "libasound2-plugins | pipewire-alsa"
         ]
       },
       "rpm": {
         "depends": [
           "xdotool"
+        ],
+        "recommends": [
+          "(pipewire-alsa if pipewire-pulseaudio)",
+          "(alsa-plugins-pulse if pulseaudio)",
+          "(alsa-plugins-pulseaudio if pulseaudio)"
         ]
       }
     },

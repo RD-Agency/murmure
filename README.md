@@ -80,6 +80,27 @@ CUDA ne démarre pas. `GGML_VK_VISIBLE_DEVICES=1` choisit un autre GPU (index `v
 Secrets du repo : `APPLE_*` (signature et notarisation), `OVH_S3_ACCESS_KEY` / `OVH_S3_SECRET_KEY`,
 `TAURI_SIGNING_PRIVATE_KEY(_PASSWORD)` (clé des mises à jour, sauvegardée dans `~/.murmure-signing/`).
 
+## Distributions Linux supportées
+
+Plancher : **glibc ≥ 2.34 et webkit2gtk-4.1** (Tauri v2). Les binaires sont construits sur Ubuntu 22.04.
+
+| Famille | Versions testées (installation, lancement, mode CLI) | Paquet |
+|---|---|---|
+| openSUSE | Leap 15.6, Leap 16.0, Tumbleweed | `.rpm` (`zypper install --allow-unsigned-rpm`) |
+| Fedora | 43, 44 | `.rpm` (`dnf install`) |
+| Debian / Ubuntu / Mint | Debian 12, 13 · Ubuntu 22.04, 24.04 · Mint 22 | `.deb` (`apt install ./…`) |
+| Toutes | idem | `.AppImage` (variante standard seulement) |
+
+Exclues faute de webkit2gtk-4.1 ou de glibc 2.34 : Debian 11, Ubuntu 20.04, openSUSE Leap ≤ 15.5, RHEL/Alma 9.
+
+Variante NVIDIA (`-cuda`) : CUDA 12 (cudart, cuBLAS) est livré dans `/usr/lib/murmure/cuda` ; seul le pilote NVIDIA
+propriétaire est requis (≥ 525, CUDA 12 ou 13), cartes Turing (RTX 20) à Blackwell (RTX 50).
+
+Son : la capture passe par ALSA. Sous PulseAudio ou PipeWire, le périphérique « default » doit être routé par
+`alsa-plugins-pulse` (openSUSE), `alsa-plugins-pulseaudio` / `pipewire-alsa` (Fedora) ou `libasound2-plugins` /
+`pipewire-alsa` (Debian) : le paquet les recommande. Si la source par défaut du système est le moniteur d'une
+sortie (HDMI…), l'app le signale ; corriger dans les réglages audio de KDE ou avec `pactl set-default-source`.
+
 ## Modèle local
 
 Le modèle s'installe tout seul en arrière-plan au premier lancement (environ 550 Mo, vérifié par SHA256,
@@ -100,6 +121,20 @@ de sortie fait foi.
 - **Linux X11** : rien de spécial (`xdotool` conseillé).
 - **Linux Wayland** : le collage passe par `wtype` ou `ydotool`. Le raccourci global n'est pas capté sous Wayland :
   liez un raccourci du bureau (KDE : Réglages › Raccourcis) à la commande `murmure --toggle`.
+  KDE (KWin) ne gère pas le protocole de `wtype` : utilisez `ydotool` (accès à `/dev/uinput` + démon utilisateur) :
+
+  ```bash
+  sudo zypper install -y ydotool        # Fedora : sudo dnf install -y ydotool
+  echo 'KERNEL=="uinput", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"' | sudo tee /etc/udev/rules.d/80-uinput.rules
+  echo uinput | sudo tee /etc/modules-load.d/uinput.conf
+  sudo usermod -aG input "$USER"        # puis se déconnecter / reconnecter
+  # Démon côté utilisateur (même socket que le client ; le service système de Fedora tourne en root) :
+  mkdir -p ~/.config/systemd/user && printf '[Unit]\nDescription=ydotoold\n[Service]\nExecStart=/usr/bin/ydotoold\nRestart=always\n[Install]\nWantedBy=default.target\n' > ~/.config/systemd/user/ydotool.service
+  systemctl --user daemon-reload && systemctl --user enable --now ydotool
+  ```
+
+  Le plus simple reste la session « Plasma (X11) » à l'écran de connexion quand elle existe
+  (openSUSE Leap 16 / Tumbleweed : `sudo zypper install -y plasma6-session-x11`).
 
 ## Serveur
 

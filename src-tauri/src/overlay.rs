@@ -30,6 +30,9 @@ pub fn init(app: &AppHandle) {
         }
     };
     log_err("set_focusable", w.set_focusable(false));
+    // Linux : la fenêtre, déclarée invisible, n'est pas encore réalisée (pas de GdkWindow) et tao
+    // panique (`window().unwrap()`) : on l'applique à chaque affichage, dans `show`.
+    #[cfg(not(target_os = "linux"))]
     log_err("set_ignore_cursor_events", w.set_ignore_cursor_events(true));
     log_err("set_always_on_top", w.set_always_on_top(true));
     log_err("set_visible_on_all_workspaces", w.set_visible_on_all_workspaces(true));
@@ -78,6 +81,10 @@ pub fn show(app: &AppHandle) {
     #[cfg(not(target_os = "macos"))]
     if let Err(e) = w.show() {
         log::warn!("overlay : affichage : {e}");
+    }
+    #[cfg(target_os = "linux")]
+    if let Err(e) = w.set_ignore_cursor_events(true) {
+        log::warn!("overlay : set_ignore_cursor_events : {e}");
     }
 }
 

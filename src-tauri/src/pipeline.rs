@@ -6,7 +6,7 @@
 //! du raccourci. La transcription est lancée en tâche async (locale dans
 //! `spawn_blocking`, distante en async) pour ne pas bloquer la file.
 
-use crate::audio::Recorder;
+use crate::audio::{self, Recorder};
 use crate::engine::{LocalEngine, RemoteEngine, TranscribeOptions};
 use crate::history::{self, HistoryEntry};
 use crate::inject::{self, Outcome};
@@ -30,6 +30,12 @@ const LEVEL_INTERVAL: Duration = Duration::from_millis(33);
 const SILENCE_RMS: f32 = 0.002;
 const SILENCE_PEAK: f32 = 0.01;
 const SAMPLE_RATE: usize = 16_000;
+
+/// Prise silencieuse au-delà de cette durée : message d'aide au lieu d'un abandon muet.
+const SILENCE_HINT_AFTER: Duration = Duration::from_millis(1500);
+/// Messages courts (la pastille tronque) ; le détail va dans le journal et les réglages s'ouvrent.
+const MONITOR_SOURCE_MSG: &str = "Micro par défaut = sortie audio : choisissez votre micro";
+const SILENT_MSG: &str = "Aucun son capté : vérifiez le micro dans Réglages";
 
 pub const NO_MODEL_MSG: &str = "Aucun modèle local téléchargé — ouvrez Murmure pour en installer un";
 
@@ -281,9 +287,30 @@ fn stop(app: &AppHandle) {
             return;
         }
     };
+    let silent = is_silent(&samples);
+    if silent && duration >= SILENCE_HINT_AFTER {
+        // Aucun son pendant une vraie prise : on dit pourquoi au lieu d'abandonner sans rien dire.
+        let monitor = if audio::follows_server_default(settings.input_device.as_deref()) {
+            audio::default_source_monitor()
+        } else {
+            None
+        };
+        match monitor {
+            Some(source) => {
+                log::warn!(
+                    "la source par défaut du serveur son est le moniteur d'une sortie ({source}) : \
+                     choisissez le micro dans Réglages › Microphone ou dans les réglages audio du système"
+                );
+                fail(app, MONITOR_SOURCE_MSG);
+                tray::show_main(app, Some("settings"));
+            }
+            None => fail(app, SILENT_MSG),
+        }
+        return;
+    }
     if duration < MIN_RECORDING
         || samples.len() < SAMPLE_RATE * MIN_RECORDING.as_millis() as usize / 1000
-        || is_silent(&samples)
+        || silent
     {
         log::debug!("enregistrement trop court ou silencieux : abandon");
         finish_idle(app, generation, None);

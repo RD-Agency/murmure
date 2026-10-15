@@ -105,7 +105,9 @@ jobs:
         if: runner.os == 'Linux' && env.SELF_HOSTED != 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+          # Ayatana (et non libappindicator3) : même dépendance que le build CUDA de la tour, et seul
+          # paquet présent partout (Debian 12+, Ubuntu 22.04+, Fedora, openSUSE Leap 15.6/16, Tumbleweed).
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf \
             libasound2-dev libxdo-dev libssl-dev cmake clang rpm ${{ matrix.features == 'vulkan' && 'libvulkan-dev' || '' }}
 
       - name: Vulkan SDK (glslc et en-têtes récents ; glslc absent des dépôts Ubuntu 22.04)
@@ -125,7 +127,8 @@ jobs:
         if: matrix.features == 'cuda' && env.SELF_HOSTED != 'true'
         uses: Jimver/cuda-toolkit@v0.2.24
         with:
-          cuda: "12.6.3"
+          # 12.9 comme sur la tour : cuBLAS ≥ 12.8 requis pour Blackwell (RTX 50, sm_120).
+          cuda: "12.9.0"
           method: network
           sub-packages: '["nvcc", "cudart", "cudart-dev", "cccl"]'
           non-cuda-sub-packages: '["libcublas", "libcublas-dev"]'
@@ -185,8 +188,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          # Architectures CUDA sur runner GitHub (toolkit 12.6) : Turing → Ada, PTX pour les plus récentes.
-          [ -z "$CMAKE_CUDA_ARCHITECTURES" ] && export CMAKE_CUDA_ARCHITECTURES="75-real;86-real;89-real;89-virtual"
+          # Architectures CUDA sur runner GitHub (toolkit 12.9) : Turing → Blackwell (RTX 50), PTX pour les suivantes.
+          [ -z "$CMAKE_CUDA_ARCHITECTURES" ] && export CMAKE_CUDA_ARCHITECTURES="75-real;86-real;89-real;120-real;120-virtual"
           if [ -n "$APPLE_API_KEY" ] && [ -f "$RUNNER_TEMP/apple_api_key.p8" ]; then
             export APPLE_API_KEY_PATH="$RUNNER_TEMP/apple_api_key.p8"
           fi

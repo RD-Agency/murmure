@@ -52,6 +52,65 @@ pub fn list_input_devices() -> Vec<AudioDevice> {
     devices
 }
 
+/// Linux (PulseAudio / PipeWire) : nom de la source par défaut du serveur son quand c'est le
+/// moniteur d'une sortie (ex. `alsa_output.pci-0000_02_00.1.hdmi-stereo.monitor`). Le micro
+/// « default » d'ALSA enregistre alors ce qui sort des haut-parleurs, donc du silence.
+pub fn default_source_monitor() -> Option<String> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let pactl = |args: &[&str]| {
+        std::process::Command::new("pactl")
+            .args(args)
+            .env("LC_ALL", "C")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    };
+    // `get-default-source` : PulseAudio ≥ 15 et PipeWire ; sinon la ligne de `pactl info`.
+    let source = pactl(&["get-default-source"])
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| pactl(&["info"]).and_then(|info| parse_default_source(&info)))?;
+    is_monitor_source(&source).then_some(source)
+}
+
+fn parse_default_source(pactl_info: &str) -> Option<String> {
+    pactl_info
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("Default Source:"))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn is_monitor_source(name: &str) -> bool {
+    name.ends_with(".monitor")
+}
+
+/// Micro choisi qui suit la source par défaut du serveur son (aucun choix, ou périphérique ALSA
+/// virtuel routé vers PulseAudio / PipeWire).
+pub fn follows_server_default(device: Option<&str>) -> bool {
+    match device.map(str::trim) {
+        None | Some("") => true,
+        Some(d) => matches!(d, "default" | "pulse" | "pipewire" | "sysdefault"),
+    }
+}
+
+/// Linux : le périphérique « default » d'ALSA n'est pas routé vers le serveur son (ex. PipeWire
+/// sans `pipewire-alsa`). On essaie les périphériques ALSA du serveur son, s'ils existent.
+fn server_fallback(host: &cpal::Host) -> Option<(cpal::Device, cpal::SupportedStreamConfig)> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let devices: Vec<cpal::Device> = host.input_devices().ok()?.collect();
+    ["pipewire", "pulse"].iter().find_map(|want| {
+        let d = devices.iter().find(|d| d.name().ok().as_deref() == Some(*want))?;
+        let c = d.default_input_config().ok()?;
+        Some((d.clone(), c))
+    })
+}
+
 /// Commande envoyée au thread de capture.
 enum Command {
     /// Arrêt normal : on renvoie l'audio.
@@ -191,9 +250,23 @@ fn open_stream(
         None => host.default_input_device().ok_or_else(|| anyhow!("Aucun micro disponible"))?,
     };
 
-    let supported = device
-        .default_input_config()
-        .context("Configuration du micro illisible (accès au micro refusé ?)")?;
+    let (device, supported) = match device.default_input_config() {
+        Ok(c) => (device, c),
+        Err(e) => match server_fallback(&host).filter(|_| follows_server_default(device_name)) {
+            Some((d, c)) => {
+                log::warn!(
+                    "micro par défaut d'ALSA inutilisable ({e}) : repli sur « {} » \
+                     (installez pipewire-alsa ou le plugin ALSA pulse pour corriger)",
+                    d.name().unwrap_or_default()
+                );
+                (d, c)
+            }
+            None => {
+                return Err(anyhow::Error::new(e)
+                    .context("Configuration du micro illisible (accès au micro refusé ?)"));
+            }
+        },
+    };
     let format = supported.sample_format();
     let config: StreamConfig = supported.config();
     let rate = config.sample_rate.0;
@@ -338,6 +411,19 @@ pub(crate) fn resample_to_16k(input: &[f32], rate: u32) -> anyhow::Result<Vec<f3
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn monitor_source_detection() {
+        assert!(is_monitor_source("alsa_output.pci-0000_02_00.1.pro-output-3.monitor"));
+        assert!(!is_monitor_source("alsa_input.usb-046d_HD_Pro_Webcam_C920-02.analog-stereo"));
+        let info = "Server Name: pulseaudio\nDefault Sink: alsa_output.x\nDefault Source: alsa_output.x.monitor\n";
+        assert_eq!(parse_default_source(info).as_deref(), Some("alsa_output.x.monitor"));
+        assert_eq!(parse_default_source("Server Name: x\n"), None);
+        assert!(follows_server_default(None));
+        assert!(follows_server_default(Some("default")));
+        assert!(follows_server_default(Some("pipewire")));
+        assert!(!follows_server_default(Some("sysdefault:CARD=C920")));
+    }
 
     fn sine(rate: u32, freq: f32, secs: f32) -> Vec<f32> {
         let n = (rate as f32 * secs) as usize;
