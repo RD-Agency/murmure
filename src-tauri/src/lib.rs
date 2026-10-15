@@ -2,6 +2,7 @@
 // Modules de l'agent audio/moteurs
 pub mod audio;
 pub mod audio_file;
+pub mod chunking;
 pub mod config_transfer;
 pub mod engine;
 pub mod file_transcription;

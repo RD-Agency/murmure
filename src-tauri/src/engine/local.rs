@@ -4,7 +4,8 @@
 use super::{clean_transcript, TranscribeOptions};
 use anyhow::{anyhow, Context};
 use std::path::{Path, PathBuf};
-use std::sync::Once;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Once};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 /// whisper.cpp tolère mal les clips de moins d'une seconde : on complète à ~1,1 s.
@@ -114,6 +115,12 @@ fn flash_attn_ok(backend: Option<&str>) -> bool {
     !backend.is_some_and(|b| b.eq_ignore_ascii_case("vulkan"))
 }
 
+/// Un GPU sera utilisé par le moteur local (résultat de [`acceleration`] mis en cache).
+pub fn gpu_available() -> bool {
+    static GPU: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *GPU.get_or_init(|| acceleration().is_some())
+}
+
 /// Libellé lisible : « Vulkan · NVIDIA GeForce RTX 5050 », ou « Processeur ».
 pub fn acceleration_label() -> String {
     match acceleration() {
@@ -208,7 +215,21 @@ impl LocalEngine {
 
     /// Transcrit un signal mono 16 kHz f32. Un état whisper neuf est créé à chaque appel.
     pub fn transcribe(&self, samples: &[f32], opts: &TranscribeOptions) -> anyhow::Result<String> {
-        self.transcribe_with(samples, opts, default_strategy(self.gpu))
+        self.transcribe_with(samples, opts, default_strategy(self.gpu), None)
+    }
+
+    /// Comme [`LocalEngine::transcribe`] ; whisper.cpp s'interrompt dès que `cancel` passe à vrai
+    /// (vérifié entre deux étapes de calcul) et renvoie une erreur.
+    pub fn transcribe_cancellable(
+        &self,
+        samples: &[f32],
+        opts: &TranscribeOptions,
+        cancel: Arc<AtomicBool>,
+    ) -> anyhow::Result<String> {
+        if cancel.load(Ordering::Relaxed) {
+            anyhow::bail!("Transcription annulée");
+        }
+        self.transcribe_with(samples, opts, default_strategy(self.gpu), Some(cancel))
     }
 
     pub(crate) fn transcribe_with(
@@ -216,6 +237,7 @@ impl LocalEngine {
         samples: &[f32],
         opts: &TranscribeOptions,
         strategy: SamplingStrategy,
+        cancel: Option<Arc<AtomicBool>>,
     ) -> anyhow::Result<String> {
         if samples.is_empty() {
             return Ok(String::new());
@@ -251,11 +273,20 @@ impl LocalEngine {
         if let Some(p) = prompt.as_deref() {
             params.set_initial_prompt(p);
         }
+        if let Some(flag) = cancel.clone() {
+            // `Box<dyn FnMut>` explicite : whisper-rs 0.15 range la fermeture sous ce type et la
+            // relit sous le type du paramètre ; les deux doivent coïncider. La fermeture n'est
+            // jamais libérée par whisper-rs (quelques octets par segment).
+            let abort: Box<dyn FnMut() -> bool> = Box::new(move || flag.load(Ordering::Relaxed));
+            params.set_abort_callback_safe(abort);
+        }
 
         let mut state = self.ctx.create_state().context("Création de l'état whisper")?;
-        state
-            .full(params, audio)
-            .map_err(|e| anyhow!("Transcription locale en échec : {e}"))?;
+        let done = state.full(params, audio);
+        if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            anyhow::bail!("Transcription annulée");
+        }
+        done.map_err(|e| anyhow!("Transcription locale en échec : {e}"))?;
 
         let mut text = String::new();
         for segment in state.as_iter() {
@@ -371,14 +402,14 @@ mod tests {
         for _ in 0..3 {
             let t = Instant::now();
             let text = engine
-                .transcribe_with(&samples, &opts, SamplingStrategy::Greedy { best_of: 1 })
+                .transcribe_with(&samples, &opts, SamplingStrategy::Greedy { best_of: 1 }, None)
                 .unwrap();
             println!("greedy : {} ms → {text}", t.elapsed().as_millis());
         }
         for _ in 0..2 {
             let t = Instant::now();
             let text = engine
-                .transcribe_with(&samples, &opts, SamplingStrategy::BeamSearch { beam_size: 5, patience: -1.0 })
+                .transcribe_with(&samples, &opts, SamplingStrategy::BeamSearch { beam_size: 5, patience: -1.0 }, None)
                 .unwrap();
             println!("beam 5 : {} ms → {text}", t.elapsed().as_millis());
         }
@@ -407,6 +438,11 @@ mod tests {
     /// `manifest.jsonl`) : un JSON `{meta, rows}` par configuration, noté par `score.py`.
     /// `MURMURE_BENCH_DATA=data MURMURE_BENCH_CORPORA=long,ponct MURMURE_BENCH_OUT=r.json
     ///  MURMURE_BENCH_LABEL=… cargo test --release --lib engine::local::tests::corpus_bench -- --ignored --nocapture`
+    ///
+    /// `MURMURE_BENCH_MODE=chunked` : l'audio est rejoué en temps réel (blocs de 100 ms) dans une
+    /// `ChunkedSession`, comme pendant une dictée ; `latency` est alors la latence perçue, du
+    /// relâchement au texte. Sinon (`full`), transcription d'un bloc au relâchement, comme avant le
+    /// découpage. La ponctuation dictée n'est pas appliquée (`score.py` s'en charge).
     #[test]
     #[ignore = "nécessite un modèle et le corpus du banc d'essai"]
     fn corpus_bench() {
@@ -418,6 +454,7 @@ mod tests {
         let label = env("MURMURE_BENCH_LABEL", "murmure");
         let prompt = (env("MURMURE_BENCH_PROMPT", "1") != "0").then(|| crate::punctuation::PROMPT_FR.to_string());
         let opts = TranscribeOptions { language: Some("fr".into()), initial_prompt: prompt.clone() };
+        let chunked = env("MURMURE_BENCH_MODE", "full") == "chunked";
         let _ = env_logger::builder().is_test(true).try_init();
 
         let mut items: Vec<(String, Value)> = Vec::new();
@@ -434,7 +471,7 @@ mod tests {
         }
         let model = test_model();
         let t = Instant::now();
-        let engine = LocalEngine::load(&model).unwrap();
+        let engine = Arc::new(LocalEngine::load(&model).unwrap());
         let load_s = t.elapsed().as_secs_f64();
         let first = read_wav(&data.join(&items[0].0).join(items[0].1["wav"].as_str().unwrap()));
         let t = Instant::now();
@@ -445,16 +482,49 @@ mod tests {
         for (corpus, it) in &items {
             let samples = read_wav(&data.join(corpus).join(it["wav"].as_str().unwrap()));
             let dur = samples.len() as f64 / 16_000.0;
-            let t = Instant::now();
-            let hyp = engine.transcribe(&samples, &opts).unwrap();
-            let latency = t.elapsed().as_secs_f64();
+            use crate::chunking::{ChunkedSession, SegmentConfig};
+            let cfg = SegmentConfig::for_engine(engine.gpu);
+            // Temps réel seulement si une coupe est possible ; sinon le résultat est le même. Dans les
+            // deux modes, pour que le GPU soit au repos pendant la dictée comme en vrai.
+            let realtime = samples.len() > cfg.min_segment;
+            let replay = |sink: &mut dyn FnMut(&[f32])| {
+                let origin = Instant::now();
+                for (i, block) in samples.chunks(1600).enumerate() {
+                    if realtime {
+                        let due = std::time::Duration::from_millis(100 * i as u64);
+                        std::thread::sleep(due.saturating_sub(origin.elapsed()));
+                    }
+                    sink(block);
+                }
+            };
+            let (hyp, latency, segments) = if chunked {
+                let eng = engine.clone();
+                let session = ChunkedSession::start(
+                    cfg,
+                    opts.clone(),
+                    Arc::default(),
+                    Box::new(move |s, o, c| eng.transcribe_cancellable(s, o, c.clone()).map_err(|e| e.to_string())),
+                )
+                .unwrap();
+                let mut sink = session.sink();
+                replay(&mut sink);
+                let sent = session.segments_sent();
+                let t = Instant::now();
+                let hyp = session.finish(&samples).unwrap();
+                (hyp, t.elapsed().as_secs_f64(), sent + 1)
+            } else {
+                replay(&mut |_: &[f32]| {});
+                let t = Instant::now();
+                let hyp = engine.transcribe(&samples, &opts).unwrap();
+                (hyp, t.elapsed().as_secs_f64(), 1)
+            };
             // Aucun jeton spécial (timestamps compris) ne doit atteindre le texte.
             assert!(!hyp.contains("<|") && !hyp.contains("|>"), "jeton spécial dans le texte : {hyp}");
-            println!("{corpus}/{} {latency:.2}s RTF={:.3} | {hyp}", it["wav"].as_str().unwrap(), latency / dur);
+            println!("{corpus}/{} {latency:.2}s ({segments} segments) | {hyp}", it["wav"].as_str().unwrap());
             rows.push(json!({"corpus": corpus, "wav": it["wav"], "dur": dur, "ref": it.get("ref"),
-                "expected": it.get("expected"), "hyp": hyp, "latency": latency, "load": 0.0}));
+                "expected": it.get("expected"), "hyp": hyp, "latency": latency, "segments": segments, "load": 0.0}));
         }
-        let meta = json!({"engine": "murmure", "label": label, "model": model.file_name().unwrap().to_string_lossy(),
+        let meta = json!({"engine": "murmure", "label": label, "mode": if chunked { "chunked" } else { "full" }, "model": model.file_name().unwrap().to_string_lossy(),
             "threads": engine.threads, "gpu": engine.gpu, "prompt": prompt.is_some(), "load_s": load_s, "first_s": first_s,
             "peak_rss_mib": peak_rss_mib(), "vram_delta_mib": null,
             "size_mib": std::fs::metadata(&model).map(|m| m.len() as f64 / 1_048_576.0).unwrap_or(0.0)});
