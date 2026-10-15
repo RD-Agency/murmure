@@ -44,6 +44,12 @@ src-tauri/src/
   lib.rs                  construction de l'app Tauri, greffons, commandes, démarrage
   state.rs                état partagé (AppState) et machine d'états de la dictée
   pipeline.rs             démarrer, arrêter, annuler : audio, moteur, collage, historique
+  postprocess.rs          mise en forme finale : mot de validation, ponctuation, textes courts
+  silence.rs              détection du silence pour l'arrêt automatique
+  ducking.rs              baisse du volume de sortie pendant l'enregistrement
+  audio_file.rs           fichiers audio : décodage (Symphonia, opus-decoder), découpage sur silence
+  file_transcription.rs   transcription d'un fichier : commandes, progression, annulation
+  config_transfer.rs      export et import des réglages (.json), options --export-config et --import-config
   hotkey.rs               raccourci global : maintien, bascule, hybride
   inject.rs               collage dans l'application active
   wayland.rs              détection d'une session Wayland, état des portails, conversions
@@ -74,11 +80,43 @@ raccourci pressé   ─► état recording, pastille visible, son de départ, Re
 raccourci relâché  ─► mode hybride : appui de moins de 300 ms → mains libres, on attend un second appui
                    ─► Recorder::stop ─► état transcribing
                    ─► LocalEngine::transcribe (thread bloquant) ou RemoteEngine::transcribe (async)
-                   ─► nettoyage du texte, ponctuation dictée ─► inject::paste ─► historique
+                   ─► postprocess::finalize : espaces, mot de validation, ponctuation dictée, textes courts
+                   ─► inject::deliver (collage, puis Entrée si mot de validation) ─► historique
                    ─► événement dictation-result, état idle, pastille masquée
 Échap pendant l'enregistrement ─► cancel_dictation (X11, macOS, Windows)
+silence prolongé en bascule ou mains libres ─► Stop, comme un second appui
 enregistrement de moins de 250 ms, ou silence ─► abandon sans message
 ```
+
+**Fonction de niveau du `Recorder`.** La closure passée à `Recorder::start` vit dans le thread audio
+jusqu'à la fin de la capture. Elle porte deux choses en plus du niveau envoyé à la pastille :
+
+- `AutoStop` (`pipeline.rs`), qui nourrit `silence::SilenceDetector`. Le détecteur ne compte le silence
+  qu'après de la parole, avec un seuil adapté au bruit de fond (plancher suivi au minimum, parole à
+  12 dB au-dessus, hystérésis de 4 dB). Quand `auto_stop_silence_ms` est écoulé, et seulement si la dictée
+  est en mains libres (`Dictation::hands_free`, vrai en bascule et après un appui bref en hybride), il
+  envoie `Command::Stop`, une seule fois.
+- `ducking::Duck`, si `duck_volume` est vrai. Le volume baisse 250 ms après le début (le son de départ
+  reste audible) et revient quand la closure est détruite : fin normale, annulation (`Recorder` abandonné)
+  ou micro en échec. Le volume d'origine est aussi écrit dans `volume-restore.json`, que
+  `ducking::recover` relit au démarrage après un arrêt brutal. Le volume n'est rétabli que s'il n'a pas
+  été modifié entre-temps.
+
+**Mise en forme (`postprocess.rs`).** Sur le texte de Whisper aux espaces normalisés :
+
+1. Mot de validation (`submit_word_enabled`, `submit_words`) : comparé aux derniers mots, sans casse,
+   accents ni ponctuation autour, une lettre d'écart admise à partir de cinq lettres. Il est retiré avec
+   la virgule ou les deux-points qui le précèdent, et `submit` passe à vrai.
+2. Ponctuation dictée (`punctuation::apply_fr`).
+3. Textes courts (`short_text_plain`) : si le résultat compte trois mots ou moins, la règle est
+   rejouée sur le texte de Whisper sans son point final (un seul point, pas « … ») et sans la majuscule
+   de tête, sauf sigle, casse mixte, lettre seule ou mot écrit ainsi dans le vocabulaire. Comme la
+   ponctuation dictée passe ensuite, « merci point » donne toujours « Merci. ».
+
+`inject::deliver(…, submit)` appuie sur Entrée 150 ms après le collage, par la même voie que Ctrl+V :
+enigo (`Key::Return`), portail RemoteDesktop (`XK_Return`), `ydotool` (code 28) ou `wtype -k Return`.
+Rien n'est envoyé en mode copie seule ou si le collage a échoué. Un mot de validation dit seul envoie
+uniquement Entrée, sans entrée d'historique.
 
 ## Réglages
 
@@ -93,13 +131,18 @@ réglages par défaut.
   "language": "fr",                        // "auto" ou code ISO 639-1
   "initial_prompt": "",                    // vocabulaire : noms propres, termes techniques
   "spoken_punctuation": true,              // ponctuation dictée (langue fr ou auto)
+  "short_text_plain": true,                // trois mots ou moins : ni point final ni majuscule imposée
   "remote_endpoint": "",                   // ex. https://stt.exemple.fr/v1/audio/transcriptions
   "remote_model": "whisper-large-v3-turbo",
   "hotkey": "Alt+Space",                   // format accelerator de Tauri ; "Ctrl+Alt+Space" hors macOS
   "hotkey_mode": "hybrid",                 // "hybrid" | "hold" | "toggle"
+  "auto_stop_silence_ms": 2000,            // bascule ou mains libres : fin après ce silence ; 0 = jamais
   "input_device": null,                    // null = micro par défaut, sinon nom du périphérique
+  "duck_volume": false,                    // baisse le volume de sortie pendant l'enregistrement
   "paste_mode": "paste",                   // "paste" (presse-papiers puis Cmd/Ctrl+V) | "clipboard" (copie seule)
   "restore_clipboard": true,
+  "submit_word_enabled": false,            // mot de validation : retiré, puis Entrée après le collage
+  "submit_words": ["terminé", "envoyer"],
   "sounds": true,
   "launch_at_login": false,
   "history_enabled": true,
@@ -110,6 +153,30 @@ réglages par défaut.
 
 La clé API n'est jamais écrite dans `settings.json`. Elle est rangée dans le trousseau du système (crate
 `keyring`, service `fr.rdagency.murmure`, compte `remote_api_key`).
+
+### Export et import (`config_transfer.rs`)
+
+```jsonc
+{
+  "format": "murmure-config",
+  "version": 1,                            // un fichier de version supérieure est refusé
+  "app_version": "0.1.6",
+  "exported_at": "2026-10-15T21:00:00+02:00",
+  "settings": { … },                       // Settings sans onboarding_done ni wayland_restore_token
+  "secrets": { "remote_api_key": "…" }     // seulement sur demande explicite
+}
+```
+
+À l'import, chaque champ présent remplace la valeur actuelle, les champs absents ou inconnus sont ignorés,
+`onboarding_done` et `wayland_restore_token` restent ceux du poste. Une valeur invalide (énumération,
+raccourci) fait échouer l'import sans rien modifier. Dans l'interface, les réglages importés passent par le
+même chemin que `save_settings` (raccourci, lancement au démarrage, moteur). Un fichier qui contient un
+secret est écrit avec les droits 600 sous Unix.
+
+`murmure --export-config fichier.json [--with-secrets]` et `murmure --import-config fichier.json` sont
+traités avant Tauri, comme `--install-model`. L'import en ligne de commande écrit `settings.json` et le
+trousseau : une instance déjà ouverte garde ses réglages en mémoire jusqu'au prochain lancement. Codes de
+sortie : 0 succès, 1 échec, 2 usage.
 
 ## Commandes (front vers Rust)
 
@@ -158,6 +225,7 @@ en français pour l'utilisateur.
 | `update-available` | `UpdateInfo` |
 | `update-progress` | `{ downloaded, total }` en octets (`total` vaut 0 s'il est inconnu), environ 10 fois par seconde |
 | `wayland-status` | `WaylandStatus`, à chaque changement d'état des portails |
+| `file-transcription-progress` | `{ stage: "decoding" \| "transcribing", fraction, done, total }` ; `fraction` de 0 à 1, segments faits et total |
 
 ## Types partagés
 
@@ -176,6 +244,7 @@ type WaylandStatus  = { wayland: boolean; shortcut: PortalState; shortcut_trigge
                         shortcut_configurable: boolean; shortcut_error: string | null;
                         keyboard: PortalState; keyboard_error: string | null;
                         paste_fallback: "ydotool" | "wtype" | null };
+type FileTranscript = { text: string; file_name: string; duration_ms: number; latency_ms: number };
 ```
 
 `src/lib/types.ts` doit rester aligné sur les structures Rust : un champ ajouté d'un côté s'ajoute de
@@ -319,6 +388,45 @@ partent du bouton « Autoriser Murmure » (assistant et Réglages › Raccourc
 
 **Repli.** Sans portail des raccourcis, ou après un refus, l'utilisateur lie `murmure --toggle` à un
 raccourci du bureau (procédure affichée dans Réglages › Raccourci). Ce mode est une bascule.
+
+## Transcription de fichiers (`audio_file.rs`, `file_transcription.rs`)
+
+Bouton « Transcrire un fichier… » de l'accueil. Un seul fichier à la fois (`FileJob`, géré par Tauri).
+
+1. **Décodage** en Rust pur, sans garder le signal d'origine : Symphonia (WAV PCM et ADPCM, MP3, AAC et
+   ALAC en M4A/MP4, Ogg Vorbis, FLAC), mixage en mono et rééchantillonnage par blocs vers 16 kHz
+   (`StreamResampler`, rubato, latence compensée à la fin). Opus, absent de Symphonia, est démultiplexé
+   par Symphonia (Ogg) et décodé par `opus-decoder` directement en mono 16 kHz. Au-delà de trois heures,
+   le fichier est refusé (environ 700 Mo de signal en mémoire). `opus-decoder` reprend l'arithmétique de
+   la référence C : ses débordements volontaires feraient paniquer le profil de développement, d'où
+   `overflow-checks = false` pour ce paquet dans `Cargo.toml`.
+2. **Découpage** (`split_on_silence`) : segments d'environ 20 s, coupés au point le plus calme (trames de
+   30 ms) entre 15 et 25 s, toujours sous la fenêtre de 30 s de Whisper. Ce découpage est propre aux
+   fichiers et indépendant de celui de la dictée.
+3. **Transcription** segment par segment avec le moteur choisi, la langue et le vocabulaire des réglages ;
+   les segments silencieux sont sautés. L'annulation est vérifiée entre deux segments.
+4. **Texte** : segments joints, puis `postprocess::finalize` avec la ponctuation dictée (sans règle des
+   textes courts ni mot de validation). Le texte n'est ni collé ni ajouté à l'historique ; l'accueil
+   l'affiche avec un bouton « Copier le texte ».
+
+Les fichiers de `src-tauri/testdata/` (une seconde de sinus dans chaque format) servent aux tests de
+décodage. Test de bout en bout sur un vrai fichier :
+`MURMURE_TEST_AUDIO=dictee.m4a cargo test --release --lib file_transcription -- --ignored --nocapture`.
+
+## Baisse du volume (`ducking.rs`)
+
+Volume du périphérique de sortie par défaut, ramené à 30 % de sa valeur pendant l'enregistrement.
+
+- **Linux** : `wpctl get-volume` / `set-volume @DEFAULT_AUDIO_SINK@` (PipeWire), sinon
+  `pactl get-sink-volume` / `set-sink-volume @DEFAULT_SINK@` (PulseAudio, ou PipeWire avec
+  `pipewire-pulse`). Sans l'un des deux, rien ne se passe. `pactl` applique le même volume à tous les
+  canaux : une balance gauche-droite réglée à la main est perdue.
+- **macOS** : CoreAudio, propriété `kAudioHardwareServiceDeviceProperty_VirtualMainVolume` (celle de la
+  barre de menus), à défaut `kAudioDevicePropertyVolumeScalar` de l'élément principal ou des canaux 1 et
+  2. Certains périphériques (sortie HDMI, interfaces audio sans volume matériel) n'en exposent aucune :
+  le réglage est alors sans effet.
+- **Windows** : `IAudioEndpointVolume` (Core Audio) du périphérique de rendu par défaut, rôle console.
+- Un son déjà coupé n'est pas touché.
 
 ## Ponctuation dictée (`punctuation.rs`)
 

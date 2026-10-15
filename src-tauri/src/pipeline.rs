@@ -202,7 +202,13 @@ fn start(app: &AppHandle, hands_free: bool) {
     let level_app = app.clone();
     let last_emit = AtomicU64::new(0);
     let origin = Instant::now();
+    // Baisse du volume : rétabli quand la capture se termine (arrêt, annulation, erreur), car le
+    // `Duck` vit dans cette fonction, détenue par le thread audio.
+    let duck = settings.duck_volume.then(|| crate::ducking::Duck::start(&state.config_dir));
+    let auto_stop = AutoStop::new(settings.auto_stop_silence_ms);
     let on_level = move |level: f32| {
+        let _volume = &duck;
+        auto_stop.feed(&level_app, level);
         // Limitation à ~30 Hz quel que soit le rythme du Recorder.
         let now_ms = origin.elapsed().as_millis() as u64;
         let last = last_emit.load(Ordering::Relaxed);
@@ -245,6 +251,38 @@ fn start(app: &AppHandle, hands_free: bool) {
                 log::warn!("préchargement du moteur : {e}");
             }
         });
+    }
+}
+
+/// Arrêt automatique sur silence, en bascule ou mains libres (`auto_stop_silence_ms`).
+struct AutoStop {
+    detector: Option<parking_lot::Mutex<crate::silence::SilenceDetector>>,
+    sent: std::sync::atomic::AtomicBool,
+}
+
+impl AutoStop {
+    fn new(silence_ms: u32) -> Self {
+        let detector = (silence_ms > 0)
+            .then(|| parking_lot::Mutex::new(crate::silence::SilenceDetector::new(Duration::from_millis(silence_ms.into()))));
+        Self { detector, sent: std::sync::atomic::AtomicBool::new(false) }
+    }
+
+    /// Appelé à chaque mesure de niveau (thread audio) : envoie `Stop`, comme un second appui.
+    fn feed(&self, app: &AppHandle, level: f32) {
+        let Some(detector) = &self.detector else { return };
+        if self.sent.load(Ordering::Relaxed) || !detector.lock().feed(level, Instant::now()) {
+            return;
+        }
+        // En maintien (ou hybride touche enfoncée), c'est le relâchement qui termine.
+        let state = app.state::<AppState>();
+        let hands_free = {
+            let d = state.dictation.lock();
+            d.phase == Phase::Recording && d.hands_free
+        };
+        if hands_free && !self.sent.swap(true, Ordering::Relaxed) {
+            log::debug!("silence prolongé : fin automatique de la dictée");
+            send(app, Command::Stop);
+        }
     }
 }
 
@@ -400,15 +438,21 @@ async fn transcribe_and_deliver(
         log::debug!("résultat ignoré (dictée annulée)");
         return;
     }
-    let text = match result {
-        Ok(t) if spoken_punctuation => crate::punctuation::apply_fr(&clean_text(&t)),
-        Ok(t) => clean_text(&t),
+    let submit_words: &[String] = if settings.submit_word_enabled { &settings.submit_words } else { &[] };
+    let post = crate::postprocess::Options {
+        spoken_punctuation,
+        short_text_plain: settings.short_text_plain,
+        submit_words,
+        vocabulary: &settings.initial_prompt,
+    };
+    let crate::postprocess::Finalized { text, submit } = match result {
+        Ok(t) => crate::postprocess::finalize(&t, &post),
         Err(msg) => {
             fail(&app, &msg);
             return;
         }
     };
-    if text.is_empty() {
+    if text.is_empty() && !submit {
         finish_idle(&app, generation, None);
         return;
     }
@@ -416,10 +460,18 @@ async fn transcribe_and_deliver(
     let app2 = app.clone();
     let to_paste = text.clone();
     let (mode, restore) = (settings.paste_mode, settings.restore_clipboard);
-    let outcome = tauri::async_runtime::spawn_blocking(move || inject::deliver(&app2, &to_paste, mode, restore))
+    let outcome = tauri::async_runtime::spawn_blocking(move || inject::deliver(&app2, &to_paste, mode, restore, submit))
         .await
         .map_err(|e| e.to_string())
         .and_then(|r| r);
+    if text.is_empty() {
+        // Mot de validation seul : Entrée envoyée, rien à mémoriser.
+        match outcome {
+            Ok(_) => finish_idle(&app, generation, None),
+            Err(msg) => fail(&app, &msg),
+        }
+        return;
+    }
 
     let entry = HistoryEntry::new(text, duration_ms, latency_ms, settings.engine, model);
     if settings.history_enabled {
@@ -475,7 +527,7 @@ pub fn ensure_local_engine(app: &AppHandle, model_id: &str) -> Result<Arc<LocalE
 
 /// Normalise le texte transcrit : espaces superflus, pas d'espace en tête ni en fin.
 /// Prompt initial de Whisper : vocabulaire de l'utilisateur, plus les commandes de ponctuation dictée.
-fn initial_prompt(vocabulary: &str, spoken_punctuation: bool) -> Option<String> {
+pub(crate) fn initial_prompt(vocabulary: &str, spoken_punctuation: bool) -> Option<String> {
     let vocabulary = vocabulary.trim();
     let prompt = match (vocabulary.is_empty(), spoken_punctuation) {
         (true, false) => return None,

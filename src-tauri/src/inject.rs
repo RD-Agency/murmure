@@ -27,6 +27,8 @@ use tauri::AppHandle;
 const RESTORE_DELAY: Duration = Duration::from_millis(250);
 /// Petit délai entre l'écriture du presse-papiers et la frappe (gestionnaires de presse-papiers).
 const SETTLE_DELAY: Duration = Duration::from_millis(40);
+/// Mot de validation : délai entre le collage et Entrée, le temps que l'application insère le texte.
+const SUBMIT_DELAY: Duration = Duration::from_millis(150);
 
 /// Presse-papiers gardé vivant : sous Linux (X11), le contenu appartient au
 /// processus tant que l'objet `Clipboard` existe.
@@ -63,26 +65,51 @@ fn read_clipboard_text() -> Option<String> {
     with_clipboard(|cb| cb.get_text()).ok()
 }
 
-/// Insère `text` selon le mode demandé.
-pub fn deliver(app: &AppHandle, text: &str, mode: PasteMode, restore: bool) -> Result<Outcome, String> {
+/// Touches simulées.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Keys {
+    /// Cmd+V (macOS) ou Ctrl+V.
+    Paste,
+    /// Entrée (mot de validation).
+    Enter,
+}
+
+/// Insère `text` selon le mode demandé. `submit` : appuie sur Entrée après le collage (mot de
+/// validation) ; sans effet en mode copie seule ou si le collage a échoué. Un texte vide avec
+/// `submit` envoie seulement Entrée.
+pub fn deliver(app: &AppHandle, text: &str, mode: PasteMode, restore: bool, submit: bool) -> Result<Outcome, String> {
     match mode {
         PasteMode::Clipboard => {
-            copy_to_clipboard(text)?;
+            if !text.is_empty() {
+                copy_to_clipboard(text)?;
+            }
             Ok(Outcome::Copied)
         }
-        PasteMode::Paste => paste(app, text, restore),
+        PasteMode::Paste if text.is_empty() => {
+            if submit {
+                send_keys(app, Keys::Enter).map_err(|e| format!("Validation impossible : {e}"))?;
+            }
+            Ok(Outcome::Pasted)
+        }
+        PasteMode::Paste => paste(app, text, restore, submit),
     }
 }
 
-fn paste(app: &AppHandle, text: &str, restore: bool) -> Result<Outcome, String> {
+fn paste(app: &AppHandle, text: &str, restore: bool, submit: bool) -> Result<Outcome, String> {
     let previous = if restore { read_clipboard_text() } else { None };
     copy_to_clipboard(text)?;
     std::thread::sleep(SETTLE_DELAY);
 
-    if let Err(msg) = send_paste_keystroke(app) {
+    if let Err(msg) = send_keys(app, Keys::Paste) {
         log::warn!("collage automatique impossible : {msg}");
         // On laisse le texte dans le presse-papiers (pas de restauration).
         return Ok(Outcome::CopiedOnly(msg));
+    }
+    if submit {
+        std::thread::sleep(SUBMIT_DELAY);
+        if let Err(e) = send_keys(app, Keys::Enter) {
+            log::warn!("mot de validation : Entrée non envoyée ({e})");
+        }
     }
 
     if let Some(prev) = previous {
@@ -146,28 +173,28 @@ pub fn paste_plan(env: PasteEnv) -> Vec<PasteMethod> {
 pub const WAYLAND_COPIED_MSG: &str = "Texte copié — collez avec Ctrl+V. Pour coller automatiquement, \
      autorisez Murmure dans Réglages › Raccourci.";
 
-fn send_paste_keystroke(app: &AppHandle) -> Result<(), String> {
+fn send_keys(app: &AppHandle, keys: Keys) -> Result<(), String> {
     if is_wayland() {
-        return paste_wayland(app);
+        return keys_wayland(app, keys);
     }
     #[cfg(target_os = "macos")]
     {
         let (tx, rx) = std::sync::mpsc::channel();
         app.run_on_main_thread(move || {
-            let _ = tx.send(enigo_paste());
+            let _ = tx.send(enigo_keys(keys));
         })
         .map_err(|e| format!("Thread principal indisponible : {e}"))?;
         rx.recv_timeout(Duration::from_secs(3))
-            .map_err(|_| "Délai dépassé pendant la simulation du collage".to_string())?
+            .map_err(|_| "Délai dépassé pendant la simulation du clavier".to_string())?
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = app;
-        enigo_paste()
+        enigo_keys(keys)
     }
 }
 
-fn enigo_paste() -> Result<(), String> {
+fn enigo_keys(keys: Keys) -> Result<(), String> {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 
     let mut enigo = Enigo::new(&Settings::default()).map_err(|e| match e {
@@ -178,6 +205,12 @@ fn enigo_paste() -> Result<(), String> {
         }
         other => format!("Simulation clavier indisponible ({other}) — le texte est dans le presse-papiers."),
     })?;
+
+    if keys == Keys::Enter {
+        return enigo
+            .key(Key::Return, Direction::Click)
+            .map_err(|e| format!("Simulation de la touche Entrée impossible : {e}"));
+    }
 
     #[cfg(target_os = "macos")]
     let modifier = Key::Meta;
@@ -249,8 +282,21 @@ fn run_tool(bin: &str, args: &[&str]) -> Result<(), String> {
     }
 }
 
-/// Collage sous Wayland selon [`paste_plan`].
-fn paste_wayland(app: &AppHandle) -> Result<(), String> {
+/// Arguments de l'outil de secours pour ces touches (codes evdev pour `ydotool`).
+pub fn tool_args(method: PasteMethod, keys: Keys) -> &'static [&'static str] {
+    match (method, keys) {
+        // KEY_LEFTCTRL = 29, KEY_V = 47.
+        (PasteMethod::Ydotool, Keys::Paste) => &["key", "29:1", "47:1", "47:0", "29:0"],
+        // KEY_ENTER = 28.
+        (PasteMethod::Ydotool, Keys::Enter) => &["key", "28:1", "28:0"],
+        (PasteMethod::Wtype, Keys::Paste) => &["-M", "ctrl", "v", "-m", "ctrl"],
+        (PasteMethod::Wtype, Keys::Enter) => &["-k", "Return"],
+        _ => &[],
+    }
+}
+
+/// Touches sous Wayland selon [`paste_plan`].
+fn keys_wayland(app: &AppHandle, keys: Keys) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     let portal_ready = crate::portal::keyboard_ready(app);
     #[cfg(not(target_os = "linux"))]
@@ -262,19 +308,24 @@ fn paste_wayland(app: &AppHandle) -> Result<(), String> {
     for method in paste_plan(env) {
         let res = match method {
             #[cfg(target_os = "linux")]
-            PasteMethod::Portal => crate::portal::paste_blocking(app),
-            // KEY_LEFTCTRL = 29, KEY_V = 47 (codes evdev).
-            PasteMethod::Ydotool => run_tool("ydotool", &["key", "29:1", "47:1", "47:0", "29:0"]),
-            PasteMethod::Wtype => run_tool("wtype", &["-M", "ctrl", "v", "-m", "ctrl"]),
+            PasteMethod::Portal => match keys {
+                Keys::Paste => crate::portal::paste_blocking(app),
+                Keys::Enter => crate::portal::enter_blocking(app),
+            },
+            PasteMethod::Ydotool => run_tool("ydotool", tool_args(method, keys)),
+            PasteMethod::Wtype => run_tool("wtype", tool_args(method, keys)),
             _ => continue,
         };
         match res {
             Ok(()) => {
-                log::debug!("collage Wayland via {method:?}");
+                log::debug!("{keys:?} sous Wayland via {method:?}");
                 return Ok(());
             }
-            Err(e) => log::debug!("collage Wayland via {method:?} : {e}"),
+            Err(e) => log::debug!("{keys:?} sous Wayland via {method:?} : {e}"),
         }
+    }
+    if keys == Keys::Enter {
+        return Err("aucune méthode de simulation du clavier disponible".into());
     }
     #[cfg(target_os = "linux")]
     crate::portal::notify(app, "Texte copié", "Collez-le avec Ctrl+V.");
@@ -304,6 +355,14 @@ mod tests {
         assert_eq!(paste_plan(env(true, false, true, true)), [Ydotool, Wtype]);
         assert_eq!(paste_plan(env(true, false, false, true)), [Wtype]);
         assert_eq!(paste_plan(env(true, true, false, true)), [Portal, Wtype]);
+    }
+
+    #[test]
+    fn touches_des_outils_de_secours() {
+        assert_eq!(tool_args(Ydotool, Keys::Paste), ["key", "29:1", "47:1", "47:0", "29:0"]);
+        assert_eq!(tool_args(Ydotool, Keys::Enter), ["key", "28:1", "28:0"]);
+        assert_eq!(tool_args(Wtype, Keys::Enter), ["-k", "Return"]);
+        assert!(tool_args(Enigo, Keys::Enter).is_empty());
     }
 
     #[test]

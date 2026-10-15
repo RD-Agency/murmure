@@ -60,12 +60,21 @@ sha2 = "0.10"
 fs4 = "1"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+tauri-plugin-dialog = "2"
+# Transcription de fichiers audio : décodage en Rust pur (WAV, MP3, AAC/M4A, Ogg Vorbis, FLAC) ;
+# Opus, absent de Symphonia, par opus-decoder (Rust pur également).
+symphonia = { version = "0.6", default-features = false, features = ["wav", "pcm", "adpcm", "mp3", "aac", "alac", "isomp4", "ogg", "vorbis", "flac"] }
+opus-decoder = "0.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Wayland : raccourci global (GlobalShortcuts) et collage (RemoteDesktop) via les portails XDG.
 ashpd = { version = "0.13", default-features = false, features = ["tokio", "global_shortcuts", "remote_desktop", "screencast", "notification"] }
 # Presse-papiers Wayland natif (wlr-data-control / ext-data-control) ; repli X11 automatique.
 arboard = { version = "3", features = ["wayland-data-control"] }
+
+[target.'cfg(windows)'.dependencies]
+# Volume de sortie (IAudioEndpointVolume) pour la baisse du son pendant la dictée.
+windows = { version = "0.62", features = ["Win32_Media_Audio", "Win32_Media_Audio_Endpoints", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.15", features = ["metal", "raw-api", "log_backend"] }
@@ -81,3 +90,9 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+# opus-decoder reprend l'arithmétique de la référence C, où certains décalages débordent sans
+# conséquence : en profil de développement (et donc de test), le contrôle des débordements le ferait
+# paniquer. Le profil release n'a pas ce contrôle.
+[profile.dev.package.opus-decoder]
+overflow-checks = false

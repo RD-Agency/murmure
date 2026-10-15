@@ -2,6 +2,7 @@
 import { useMemo } from "react";
 import { Card } from "../components/Card";
 import { EngineStatus, useEngineReady } from "../components/EngineStatus";
+import { FileTranscriber } from "../components/FileTranscriber";
 import { HistoryItem } from "../components/HistoryItem";
 import { IconArrowRight, IconMic } from "../components/Icons";
 import { InstallCard, useActiveInstall } from "../components/InstallCard";
@@ -75,6 +76,9 @@ export function Home() {
 
           {/* Installation automatique du modèle local */}
           <InstallCard />
+
+          {/* Transcription d'un fichier audio */}
+          <FileTranscriber />
 
           {/* Statistiques */}
           <div className="grid grid-cols-3 gap-3">

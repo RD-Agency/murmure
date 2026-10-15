@@ -4,6 +4,8 @@ import { api, errorMessage, on } from "./lib/api";
 import type {
   DownloadProgress,
   DownloadStatus,
+  FileProgress,
+  FileTranscript,
   HistoryEntry,
   ModelInfo,
   Platform,
@@ -26,6 +28,17 @@ export interface UpdateSlice {
   error: string | null;
 }
 
+/** Transcription d'un fichier audio, gardée ici pour survivre à un changement d'écran. */
+export interface FileJobSlice {
+  status: "idle" | "running" | "done" | "error";
+  name: string | null;
+  progress: FileProgress | null;
+  result: FileTranscript | null;
+  error: string | null;
+}
+
+const FILE_JOB_IDLE: FileJobSlice = { status: "idle", name: null, progress: null, result: null, error: null };
+
 interface AppState {
   ready: boolean;
   platform: Platform;
@@ -41,6 +54,7 @@ interface AppState {
   update: UpdateSlice;
   /** Linux Wayland : état des portails (null hors Tauri/avant init). */
   wayland: WaylandStatus | null;
+  fileJob: FileJobSlice;
 
   init: () => Promise<void>;
   setView: (v: View) => void;
@@ -57,6 +71,12 @@ interface AppState {
   clearHistory: () => Promise<void>;
   checkUpdate: () => Promise<void>;
   installUpdate: () => Promise<void>;
+  /** Choisit un fichier audio puis le transcrit. */
+  transcribeFile: () => Promise<void>;
+  cancelFileTranscription: () => Promise<void>;
+  dismissFileJob: () => void;
+  /** Importe un fichier de réglages ; renvoie false si l'utilisateur a annulé. */
+  importConfig: () => Promise<boolean>;
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -78,6 +98,7 @@ export const useApp = create<AppState>((set, get) => ({
   hasApiKey: false,
   update: { status: "idle", available: null, progress: null, error: null },
   wayland: null,
+  fileJob: FILE_JOB_IDLE,
 
   init: async () => {
     if (initialized) return;
@@ -89,6 +110,9 @@ export const useApp = create<AppState>((set, get) => ({
     });
     on("navigate", (v) => set({ view: v }));
     on("wayland-status", (wayland) => set({ wayland }));
+    on("file-transcription-progress", (progress) =>
+      set((st) => (st.fileJob.status === "running" ? { fileJob: { ...st.fileJob, progress } } : st)),
+    );
     on("update-available", (info) =>
       set((st) =>
         st.update.status === "installing"
@@ -278,6 +302,45 @@ export const useApp = create<AppState>((set, get) => ({
     } catch (e) {
       set((st) => ({ update: { ...st.update, status: "error", error: errorMessage(e) } }));
     }
+  },
+
+  transcribeFile: async () => {
+    if (get().fileJob.status === "running") return;
+    let path: string | null;
+    try {
+      path = await api.pickAudioFile();
+    } catch (e) {
+      set({ fileJob: { ...FILE_JOB_IDLE, status: "error", error: errorMessage(e) } });
+      return;
+    }
+    if (!path) return;
+    const name = path.split(/[\\/]/).pop() ?? path;
+    set({ fileJob: { ...FILE_JOB_IDLE, status: "running", name } });
+    try {
+      const result = await api.transcribeFile(path);
+      set({ fileJob: { status: "done", name, progress: null, result, error: null } });
+    } catch (e) {
+      const msg = errorMessage(e);
+      set({ fileJob: /annul/i.test(msg) ? FILE_JOB_IDLE : { ...FILE_JOB_IDLE, status: "error", name, error: msg } });
+    }
+  },
+
+  cancelFileTranscription: async () => {
+    await api.cancelFileTranscription().catch(() => undefined);
+  },
+
+  dismissFileJob: () => {
+    if (get().fileJob.status !== "running") set({ fileJob: FILE_JOB_IDLE });
+  },
+
+  importConfig: async () => {
+    // Une modification locale en attente serait écrasée par l'import : on l'enregistre d'abord.
+    await get().flushSettings();
+    const settings = await api.importConfig();
+    if (!settings) return false;
+    set({ settings });
+    await get().refreshApiKey();
+    return true;
   },
 
   installUpdate: async () => {

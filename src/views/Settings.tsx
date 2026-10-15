@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useEffect, useState } from "react";
+import { Button } from "../components/Button";
 import { Group, Row, Section } from "../components/Card";
 import { HotkeyRecorder } from "../components/HotkeyRecorder";
 import {
@@ -22,9 +23,9 @@ import { Select } from "../components/Select";
 import { Switch } from "../components/Switch";
 import { UpdateRow } from "../components/UpdateBanner";
 import { useWayland, WaylandPanel } from "../components/WaylandPanel";
-import { api } from "../lib/api";
+import { api, errorMessage } from "../lib/api";
 import { LANGUAGES } from "../lib/format";
-import type { AudioDevice, HotkeyMode } from "../lib/types";
+import type { AudioDevice, HotkeyMode, Platform } from "../lib/types";
 import { useApp } from "../store";
 
 const MODES: { value: HotkeyMode; title: string; text: string; recommended?: boolean }[] = [
@@ -38,12 +39,41 @@ const MODES: { value: HotkeyMode; title: string; text: string; recommended?: boo
   { value: "toggle", title: "Basculer", text: "Un appui pour commencer, un autre pour terminer." },
 ];
 
+const AUTO_STOP: { value: number; label: string }[] = [
+  { value: 0, label: "Jamais" },
+  { value: 1000, label: "Après 1 s de silence" },
+  { value: 1500, label: "Après 1,5 s de silence" },
+  { value: 2000, label: "Après 2 s de silence" },
+  { value: 3000, label: "Après 3 s de silence" },
+  { value: 5000, label: "Après 5 s de silence" },
+  { value: 10000, label: "Après 10 s de silence" },
+];
+
+/** « terminé, envoyer » ↔ ["terminé", "envoyer"] */
+function parseWords(text: string): string[] {
+  return text
+    .split(/[,;\n]/)
+    .map((w) => w.trim())
+    .filter(Boolean);
+}
+
+const DUCK_HINT: Record<Platform, string> = {
+  macos: "Le son de l'ordinateur baisse pendant que vous parlez, puis revient à son niveau.",
+  windows: "Le son de l'ordinateur baisse pendant que vous parlez, puis revient à son niveau.",
+  linux: "Le son de l'ordinateur baisse pendant que vous parlez, puis revient à son niveau. Nécessite wpctl (PipeWire) ou pactl.",
+};
+
 export function Settings() {
   const settings = useApp((s) => s.settings)!;
   const platform = useApp((s) => s.platform);
   const update = useApp((s) => s.updateSettings);
   const [devices, setDevices] = useState<AudioDevice[]>([]);
   const wayland = useWayland();
+  const [wordsDraft, setWordsDraft] = useState(settings.submit_words.join(", "));
+  useEffect(() => {
+    // Réglages importés ou modifiés ailleurs : on resynchronise le champ s'il diffère.
+    setWordsDraft((d) => (parseWords(d).join("|") === settings.submit_words.join("|") ? d : settings.submit_words.join(", ")));
+  }, [settings.submit_words]);
 
   useEffect(() => {
     api.listInputDevices().then(setDevices).catch(() => setDevices([]));
@@ -114,6 +144,18 @@ export function Settings() {
                   />
                 </Row>
               )}
+              <Row
+                label="Textes courts"
+                htmlFor="short-text"
+                description="Pour trois mots ou moins, pas de point final ni de majuscule en tête : pratique pour un nom, une réponse brève ou une recherche."
+              >
+                <Switch
+                  id="short-text"
+                  label="Textes courts"
+                  checked={settings.short_text_plain}
+                  onChange={(short_text_plain) => update({ short_text_plain })}
+                />
+              </Row>
               <div className="px-4 py-3.5">
                 <label htmlFor="initial-prompt" className="flex items-center gap-1.5 text-[13px] font-medium text-fg">
                   <IconBook size={14} className="text-subtle" /> Vocabulaire
@@ -185,6 +227,29 @@ export function Settings() {
                     : "Échap annule une dictée en cours."}
                 </p>
               </div>
+              <Row
+                label="Arrêt automatique"
+                htmlFor="auto-stop"
+                description={
+                  settings.hotkey_mode === "hold"
+                    ? "En mode maintien, la dictée se termine au relâchement du raccourci."
+                    : "En bascule ou en mains libres, la dictée se termine d'elle-même après un silence, comme avec un second appui."
+                }
+              >
+                <Select
+                  id="auto-stop"
+                  className="w-[210px]"
+                  disabled={settings.hotkey_mode === "hold"}
+                  value={String(AUTO_STOP.some((o) => o.value === settings.auto_stop_silence_ms) ? settings.auto_stop_silence_ms : 2000)}
+                  onChange={(e) => update({ auto_stop_silence_ms: Number(e.target.value) })}
+                >
+                  {AUTO_STOP.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </Select>
+              </Row>
             </Group>
           </Section>
 
@@ -208,6 +273,14 @@ export function Settings() {
                   ))}
                   {deviceMissing && <option value={settings.input_device!}>{settings.input_device} (déconnecté)</option>}
                 </Select>
+              </Row>
+              <Row label="Baisser le volume pendant la dictée" htmlFor="duck-volume" description={DUCK_HINT[platform]}>
+                <Switch
+                  id="duck-volume"
+                  label="Baisser le volume pendant la dictée"
+                  checked={settings.duck_volume}
+                  onChange={(duck_volume) => update({ duck_volume })}
+                />
               </Row>
             </Group>
           </Section>
@@ -246,6 +319,46 @@ export function Settings() {
                   onChange={(restore_clipboard) => update({ restore_clipboard })}
                 />
               </Row>
+              <div className="px-4 py-3.5">
+                <div className="flex items-center gap-6">
+                  <div className="min-w-0 flex-1">
+                    <label htmlFor="submit-word" className="block text-[13px] font-medium text-fg">
+                      Mot de validation
+                    </label>
+                    <div className="mt-0.5 text-[12.5px] leading-relaxed text-muted">
+                      {settings.paste_mode === "paste"
+                        ? "Terminez la dictée par l'un de ces mots : il est retiré du texte et Murmure appuie sur Entrée après le collage, pour envoyer un message."
+                        : "Disponible quand le texte est collé directement."}
+                    </div>
+                  </div>
+                  <Switch
+                    id="submit-word"
+                    label="Mot de validation"
+                    checked={settings.submit_word_enabled}
+                    disabled={settings.paste_mode !== "paste"}
+                    onChange={(submit_word_enabled) => update({ submit_word_enabled })}
+                  />
+                </div>
+                {settings.submit_word_enabled && settings.paste_mode === "paste" && (
+                  <div className="mt-3 animate-fade-in">
+                    <input
+                      id="submit-words"
+                      aria-label="Mots de validation, séparés par des virgules"
+                      className="field"
+                      placeholder="terminé, envoyer"
+                      value={wordsDraft}
+                      onChange={(e) => {
+                        setWordsDraft(e.target.value);
+                        const words = parseWords(e.target.value);
+                        if (words.length) update({ submit_words: words }, 600);
+                      }}
+                    />
+                    <p className="mt-1.5 text-[12px] text-subtle">
+                      Séparés par des virgules. Reconnus seulement en toute fin de dictée, sans tenir compte des accents ni des majuscules.
+                    </p>
+                  </div>
+                )}
+              </div>
             </Group>
           </Section>
 
@@ -272,11 +385,74 @@ export function Settings() {
                 />
               </Row>
               <UpdateRow />
+              <ConfigTransferRow />
             </Group>
           </Section>
 
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Export et import des réglages en fichier .json, pour équiper plusieurs postes. */
+function ConfigTransferRow() {
+  const importConfig = useApp((s) => s.importConfig);
+  const flush = useApp((s) => s.flushSettings);
+  const [withSecrets, setWithSecrets] = useState(false);
+  const [busy, setBusy] = useState<"export" | "import" | null>(null);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const run = async (kind: "export" | "import") => {
+    setBusy(kind);
+    setMessage(null);
+    try {
+      if (kind === "export") {
+        await flush();
+        const path = await api.exportConfig(withSecrets);
+        if (path) setMessage({ ok: true, text: `Réglages exportés : ${path}` });
+      } else if (await importConfig()) {
+        setMessage({ ok: true, text: "Réglages importés et appliqués." });
+      }
+    } catch (e) {
+      setMessage({ ok: false, text: errorMessage(e) });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="px-4 py-3.5">
+      <div className="flex items-center gap-6">
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-medium text-fg">Fichier de réglages</div>
+          <div className="mt-0.5 text-[12.5px] leading-relaxed text-muted">
+            Pour équiper un autre poste à l'identique. Aussi en ligne de commande : <code className="text-[12px] whitespace-nowrap">murmure --export-config fichier.json</code>.
+          </div>
+        </div>
+        <div className="flex shrink-0 gap-2">
+          <Button size="sm" loading={busy === "import"} disabled={busy !== null} onClick={() => void run("import")}>
+            Importer…
+          </Button>
+          <Button size="sm" loading={busy === "export"} disabled={busy !== null} onClick={() => void run("export")}>
+            Exporter…
+          </Button>
+        </div>
+      </div>
+      <label className="mt-3 flex items-start gap-2 text-[12.5px] text-muted">
+        <input
+          type="checkbox"
+          className="mt-0.5 accent-[var(--accent)]"
+          checked={withSecrets}
+          onChange={(e) => setWithSecrets(e.target.checked)}
+        />
+        <span>Inclure la clé API du serveur dans l'export. Le fichier devra alors être gardé en lieu sûr.</span>
+      </label>
+      {message && (
+        <p className={`mt-2 text-[12.5px] break-all ${message.ok ? "text-success" : "text-danger"}`} role={message.ok ? "status" : "alert"}>
+          {message.text}
+        </p>
+      )}
     </div>
   );
 }

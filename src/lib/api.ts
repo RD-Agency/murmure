@@ -101,6 +101,13 @@ export const api = {
   waylandAuthorize: () => call("wayland_authorize"),
   waylandConfigureShortcut: () => call("wayland_configure_shortcut"),
   waylandRefresh: () => call("wayland_refresh"),
+  /** Exporte les réglages (boîte d'enregistrement) ; la clé API seulement si demandé. */
+  exportConfig: (includeSecrets: boolean) => call("export_config", { includeSecrets }),
+  importConfig: () => call("import_config"),
+  pickAudioFile: () => call("pick_audio_file"),
+  /** Progression par l'événement `file-transcription-progress`. */
+  transcribeFile: (path: string) => call("transcribe_file", { path }),
+  cancelFileTranscription: () => call("cancel_file_transcription"),
   /** Version de l'app en cours d'exécution. */
   getVersion: async (): Promise<string> => (isTauri ? getVersion() : (await loadMock()).MOCK_VERSION),
 };

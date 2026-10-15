@@ -41,6 +41,7 @@ const SHORTCUT_DESCRIPTION: &str = "Dicter avec Murmure (maintenir ou appuyer)";
 
 const XK_CONTROL_L: i32 = 0xffe3;
 const XK_V: i32 = 0x0076;
+const XK_RETURN: i32 = 0xff0d;
 /// Délai entre deux événements clavier simulés.
 const KEY_GAP: Duration = Duration::from_millis(12);
 /// Délai maximal pour un appel « rapide » (hors boîtes de dialogue).
@@ -581,6 +582,28 @@ async fn paste(app: &AppHandle) -> Result<(), String> {
     let release = key(XK_CONTROL_L, KeyState::Released).await;
     click.map_err(err)?;
     release.map_err(err)
+}
+
+/// Envoie Entrée par le portail (mot de validation). Bloquant, comme [`paste_blocking`].
+pub fn enter_blocking(app: &AppHandle) -> Result<(), String> {
+    let app = app.clone();
+    tauri::async_runtime::block_on(async move {
+        tokio::time::timeout(CALL_TIMEOUT, enter(&app))
+            .await
+            .map_err(|_| "Délai dépassé pendant l'envoi d'Entrée via le portail".to_string())?
+    })
+}
+
+async fn enter(app: &AppHandle) -> Result<(), String> {
+    let p = portals(app);
+    let guard = p.keyboard.lock().await;
+    let Some(k) = guard.as_ref() else {
+        return Err("Contrôle du clavier non autorisé".into());
+    };
+    let err = |e: ashpd::Error| format!("Entrée via le portail impossible : {}", describe(&e));
+    k.proxy.notify_keyboard_keysym(&k.session, XK_RETURN, KeyState::Pressed, Default::default()).await.map_err(err)?;
+    tokio::time::sleep(KEY_GAP).await;
+    k.proxy.notify_keyboard_keysym(&k.session, XK_RETURN, KeyState::Released, Default::default()).await.map_err(err)
 }
 
 // ───────────────────────────────── Notification ──────────────────────────────

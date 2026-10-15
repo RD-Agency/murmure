@@ -26,13 +26,18 @@ const DEFAULT_SETTINGS: Settings = {
   language: "fr",
   initial_prompt: "",
   spoken_punctuation: true,
+  short_text_plain: true,
   remote_endpoint: "",
   remote_model: "whisper-large-v3-turbo",
   hotkey: "Alt+Space",
   hotkey_mode: "hybrid",
+  auto_stop_silence_ms: 2000,
   input_device: null,
+  duck_volume: false,
   paste_mode: "paste",
   restore_clipboard: true,
+  submit_word_enabled: false,
+  submit_words: ["terminé", "envoyer"],
   sounds: true,
   launch_at_login: false,
   history_enabled: true,
@@ -537,6 +542,99 @@ async function waylandAuthorize(): Promise<WaylandStatus> {
   return wayland;
 }
 
+// ---------- Réglages et fichiers ----------
+
+function downloadText(name: string, text: string) {
+  const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function exportConfig(includeSecrets: boolean): string {
+  const settings: Partial<Settings> = structuredClone(data.settings);
+  delete settings.onboarding_done;
+  delete settings.wayland_restore_token;
+  const file = {
+    format: "murmure-config",
+    version: 1,
+    app_version: MOCK_VERSION,
+    exported_at: new Date().toISOString(),
+    settings,
+    ...(includeSecrets && data.apiKey ? { secrets: { remote_api_key: data.apiKey } } : {}),
+  };
+  downloadText("murmure-reglages.json", JSON.stringify(file, null, 2));
+  return "~/Téléchargements/murmure-reglages.json";
+}
+
+/** Choix d'un fichier dans le navigateur ; `null` si l'utilisateur ferme la boîte. */
+function pickFile(accept: string): Promise<File | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = accept;
+    input.onchange = () => resolve(input.files?.[0] ?? null);
+    input.oncancel = () => resolve(null);
+    input.click();
+  });
+}
+
+async function importConfig(): Promise<Settings | null> {
+  const file = await pickFile(".json,application/json");
+  if (!file) return null;
+  let parsed: { format?: string; version?: number; settings?: Partial<Settings>; secrets?: { remote_api_key?: string } };
+  try {
+    parsed = JSON.parse(await file.text());
+  } catch {
+    throw "Fichier illisible : ce n'est pas du JSON valide.";
+  }
+  if (parsed.format !== "murmure-config") throw "Ce fichier n'est pas un export de réglages de Murmure.";
+  if (!parsed.version || parsed.version > 1) throw "Ce fichier vient d'une version plus récente de Murmure : mettez Murmure à jour.";
+  const known = Object.keys(DEFAULT_SETTINGS) as (keyof Settings)[];
+  const next = { ...data.settings } as Record<string, unknown>;
+  for (const key of known) {
+    if (key === "onboarding_done" || key === "wayland_restore_token") continue;
+    if (parsed.settings && key in parsed.settings) next[key] = parsed.settings[key];
+  }
+  if (parsed.secrets?.remote_api_key) data.apiKey = parsed.secrets.remote_api_key;
+  await impl.save_settings({ settings: next as unknown as Settings });
+  return structuredClone(data.settings);
+}
+
+const pickedFiles = new Map<string, File>();
+let fileCancelled = false;
+
+async function pickAudioFile(): Promise<string | null> {
+  const file = await pickFile("audio/*,.wav,.mp3,.m4a,.aac,.ogg,.opus,.flac");
+  if (!file) return null;
+  pickedFiles.set(file.name, file);
+  return file.name;
+}
+
+async function transcribeFile(path: string) {
+  fileCancelled = false;
+  const file = pickedFiles.get(path);
+  // Durée approximative : 1 Mo par minute.
+  const durationMs = Math.max(20_000, Math.round(((file?.size ?? 2_000_000) / 1_000_000) * 60_000));
+  const total = Math.max(1, Math.ceil(durationMs / 20_000));
+  const started = Date.now();
+  for (let i = 0; i <= 10; i++) {
+    if (fileCancelled) throw "Transcription annulée";
+    mockEmit("file-transcription-progress", { stage: "decoding", fraction: (i / 10) * 0.1, done: 0, total: 0 });
+    await sleep(40);
+  }
+  const parts: string[] = [];
+  for (let i = 0; i < total; i++) {
+    if (fileCancelled) throw "Transcription annulée";
+    await sleep(350);
+    parts.push(PHRASES[i % PHRASES.length]);
+    mockEmit("file-transcription-progress", { stage: "transcribing", fraction: 0.1 + (0.9 * (i + 1)) / total, done: i + 1, total });
+  }
+  return { text: parts.join(" "), file_name: path, duration_ms: durationMs, latency_ms: Date.now() - started };
+}
+
 // ---------- Commandes ----------
 
 type Impl = {
@@ -634,6 +732,13 @@ const impl: Impl = {
     mockEmit("wayland-status", wayland);
   },
   wayland_refresh: () => wayland,
+  export_config: ({ includeSecrets }) => exportConfig(includeSecrets),
+  import_config: () => importConfig(),
+  pick_audio_file: () => pickAudioFile(),
+  transcribe_file: ({ path }) => transcribeFile(path),
+  cancel_file_transcription: () => {
+    fileCancelled = true;
+  },
 };
 
 export async function mockInvoke(cmd: CommandName, args: unknown): Promise<unknown> {

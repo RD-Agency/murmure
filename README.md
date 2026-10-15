@@ -60,7 +60,15 @@ Les détails par distribution, le son et le dépannage sont dans [docs/linux.md]
 
 Au premier lancement, Murmure télécharge le modèle de reconnaissance vocale (environ 550 Mo). Ensuite, tout
 fonctionne hors ligne. Pour préparer un parc de postes, `murmure --install-model` installe le modèle à
-l'avance, sans ouvrir de fenêtre.
+l'avance, sans ouvrir de fenêtre, et les réglages d'un poste de référence se recopient en deux commandes :
+
+```bash
+murmure --export-config murmure-reglages.json     # sur le poste de référence
+murmure --import-config murmure-reglages.json     # sur chaque autre poste, Murmure fermé
+```
+
+La clé API du serveur n'est pas exportée, sauf avec `--with-secrets` (ou la case correspondante dans
+Réglages › Général) ; le fichier doit alors être gardé en lieu sûr.
 
 ## Autorisations
 
@@ -85,6 +93,8 @@ Le raccourci par défaut est Option+Espace sur Mac et Ctrl+Alt+Espace sous Windo
 - Maintenez le raccourci, parlez, relâchez : le texte est collé.
 - Un appui bref passe en mains libres ; un second appui arrête la dictée.
 - Échap annule la dictée en cours (sauf sous Wayland, où Murmure ne capte pas les touches globalement).
+- En bascule ou en mains libres, la dictée se termine aussi seule après deux secondes de silence (réglable
+  dans Réglages › Raccourci).
 
 Une pastille discrète indique l'enregistrement et la transcription. La fenêtre principale sert surtout aux
 réglages : raccourci, langue, micro, vocabulaire (noms propres, termes techniques), mode de collage et
