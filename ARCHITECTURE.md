@@ -6,6 +6,8 @@ on relâche, le texte apparaît dans l'application active. Deux moteurs :
 - **Local** : Whisper large-v3-turbo via whisper.cpp (`whisper-rs`), Metal sur macOS, CUDA (`--features cuda`) ou
   Vulkan (`--features vulkan`) en option, exclusifs. Accélérateur détecté à l'exécution (`engine::local::acceleration`,
   premier périphérique ggml de type GPU, même règle que whisper.cpp) : beam search 5 sur GPU, greedy sur CPU.
+  Flash attention coupée sur Vulkan (whisper.cpp ne remplit pas le cache KV pour ce backend : mots répétés,
+  phrases tronquées mesurés sur RTX 5060 et lavapipe).
 - **Serveur** : n'importe quel endpoint compatible OpenAI `POST /v1/audio/transcriptions`
   (notre serveur `server/` à base de faster-whisper, ou OpenAI / Groq), authentifié par clé API (Bearer).
 

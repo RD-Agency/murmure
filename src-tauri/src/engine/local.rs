@@ -53,6 +53,14 @@ pub fn acceleration() -> Option<(String, String)> {
     }
 }
 
+/// Flash attention selon le backend. Désactivée sur Vulkan : whisper.cpp ne prévoit pas le
+/// remplissage du cache KV qu'elle exige pour ce backend (`whisper_kv_cache_get_padding`, prévu pour
+/// Metal et CUDA seulement), d'où des transcriptions dégradées (mots répétés, phrases tronquées),
+/// mesurées sur RTX 5060 (Dozen) et lavapipe. Sans elle, Vulkan retrouve la qualité du CPU.
+fn flash_attn_ok(backend: Option<&str>) -> bool {
+    !backend.is_some_and(|b| b.eq_ignore_ascii_case("vulkan"))
+}
+
 /// Libellé lisible : « Vulkan · NVIDIA GeForce RTX 5050 », ou « Processeur ».
 pub fn acceleration_label() -> String {
     match acceleration() {
@@ -83,15 +91,15 @@ impl LocalEngine {
         if !model_path.is_file() {
             anyhow::bail!("Modèle introuvable : {}", model_path.display());
         }
+        let accel = acceleration();
         let mut params = WhisperContextParameters::default();
         params.use_gpu(true);
-        params.flash_attn(true);
+        params.flash_attn(flash_attn_ok(accel.as_ref().map(|(backend, _)| backend.as_str())));
         let ctx = WhisperContext::new_with_params(path_str, params)
             .map_err(|e| anyhow!("Chargement du modèle impossible ({}) : {e}", model_path.display()))?;
 
         let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
         let threads = cores.clamp(1, 8) as i32;
-        let accel = acceleration();
         match &accel {
             Some((backend, device)) => log::info!("Accélération : {backend} ({device})"),
             None if cfg!(any(feature = "cuda", feature = "vulkan")) => {
@@ -206,6 +214,14 @@ mod tests {
         std::env::var_os("MURMURE_TEST_MODEL")
             .map(PathBuf::from)
             .unwrap_or_else(|| dirs::home_dir().unwrap().join(".whisper/models/ggml-large-v3-turbo.bin"))
+    }
+
+    #[test]
+    fn flash_attention_coupee_sur_vulkan() {
+        assert!(flash_attn_ok(None));
+        assert!(flash_attn_ok(Some("Metal")));
+        assert!(flash_attn_ok(Some("CUDA")));
+        assert!(!flash_attn_ok(Some("Vulkan")));
     }
 
     /// L'interrogation du registre ggml ne plante jamais, avec ou sans GPU (Vulkan sans pilote ICD compris).
