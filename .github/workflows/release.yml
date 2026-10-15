@@ -176,8 +176,27 @@ jobs:
             unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_ISSUER APPLE_API_KEY
           fi
           ARGS=(--target "${{ matrix.target }}")
-          # Variante CUDA : pas d'AppImage (linuxdeploy tente d'embarquer les bibliothèques du pilote NVIDIA).
-          [ -n "${{ matrix.features }}" ] && ARGS+=(--features "${{ matrix.features }}" --bundles deb,rpm)
+          if [ "${{ matrix.features }}" = "cuda" ]; then
+            # Variante CUDA : pas d'AppImage (linuxdeploy tente d'embarquer les bibliothèques du pilote NVIDIA).
+            # Les bibliothèques CUDA 12 sont livrées dans le paquet (/usr/lib/murmure/cuda, rpath posé par
+            # build.rs) : seul le pilote NVIDIA est requis, quelle que soit sa version CUDA (12 ou 13).
+            # Manifeste de mise à jour dédié, pour ne jamais basculer vers la version sans GPU.
+            LIBDIR="${MURMURE_CUDA_LIB_DIR:-$CUDA_PATH/lib64}"
+            CUDALIBS="$RUNNER_TEMP/cuda-libs"; mkdir -p "$CUDALIBS"
+            for l in libcudart.so.12 libcublas.so.12 libcublasLt.so.12; do cp -L "$LIBDIR/$l" "$CUDALIBS/$l"; done
+            ls -lh "$CUDALIBS"
+            python3 - "$CUDALIBS" "$PUBLIC_BASE/cuda/latest.json" > "$RUNNER_TEMP/cuda.conf.json" <<'PY'
+          import json, os, sys
+          d, endpoint = sys.argv[1], sys.argv[2]
+          files = {f"/usr/lib/murmure/cuda/{n}": os.path.join(d, n) for n in sorted(os.listdir(d))}
+          print(json.dumps({
+              "bundle": {"linux": {"deb": {"files": files}, "rpm": {"files": files}}},
+              "plugins": {"updater": {"endpoints": [endpoint]}},
+          }))
+          PY
+            cat "$RUNNER_TEMP/cuda.conf.json"
+            ARGS+=(--features cuda --bundles deb,rpm --config "$RUNNER_TEMP/cuda.conf.json")
+          fi
           pnpm tauri build "${ARGS[@]}"
 
       - name: Rassembler les installeurs
@@ -247,6 +266,7 @@ jobs:
             s3 "dl/$src" "s3://$S3_BUCKET/$S3_PREFIX/latest/$dst"
           done < site/latest-map.txt
           s3 site/latest.json "s3://$S3_BUCKET/$S3_PREFIX/latest.json" --cache-control "no-cache" --content-type application/json
+          [ -f site/cuda/latest.json ] && s3 site/cuda/latest.json "s3://$S3_BUCKET/$S3_PREFIX/cuda/latest.json" --cache-control "no-cache" --content-type application/json
           s3 site/index.html  "s3://$S3_BUCKET/$S3_PREFIX/index.html"  --cache-control "no-cache" --content-type "text/html; charset=utf-8"
           s3 site/icon.png    "s3://$S3_BUCKET/$S3_PREFIX/icon.png"
 

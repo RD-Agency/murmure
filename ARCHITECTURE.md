@@ -204,6 +204,10 @@ pub fn encode_wav(samples: &[f32]) -> Vec<u8>;                     // PCM 16 bit
   l'installeur NSIS sous Windows, qui relance l'app) ; au lancement suivant le marqueur est consommé et l'app
   démarre sans fenêtre. Windows installe aussi en quittant l'app. Le bouton « Redémarrer maintenant » applique
   tout de suite.
+- Variante Linux NVIDIA (`--features cuda`, paquets `…-linux-x64-cuda.deb/.rpm`) : les bibliothèques CUDA 12
+  (`libcudart`, `libcublas`, `libcublasLt`) sont livrées dans `/usr/lib/murmure/cuda` (rpath posé par `build.rs`),
+  seul le pilote NVIDIA est requis (CUDA 12 ou 13). Manifeste de mise à jour dédié `cuda/latest.json` pour ne
+  jamais basculer vers la version sans GPU.
 - Linux .deb / .rpm : l'installation exige root, la mise à jour est seulement annoncée (`update-available`,
   bouton « Installer »). L'AppImage (variable `APPIMAGE`) est mise à jour en silence.
 - Manifeste absent (404), plateforme absente, réseau coupé : log debug uniquement (les logs `error` du plugin

@@ -19,5 +19,12 @@ fn main() {
         println!("cargo:rustc-link-search=native={dir}");
         println!("cargo:rustc-link-search=native={dir}/stubs");
     }
+    // Variante CUDA (Linux) : les bibliothèques CUDA 12 (cudart, cublas, cublasLt) sont livrées dans
+    // /usr/lib/murmure/cuda par le paquet, seul le pilote NVIDIA est requis. DT_RPATH (et non RUNPATH)
+    // pour que cublas trouve aussi cublasLt.
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_CUDA");
+    if std::env::var("CARGO_FEATURE_CUDA").is_ok() && std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
+        println!("cargo:rustc-link-arg-bins=-Wl,--disable-new-dtags,-rpath,/usr/lib/murmure/cuda");
+    }
     tauri_build::build()
 }

@@ -18,7 +18,7 @@ VARIANTS = [
     ("macos-x64", "macOS", "Intel"),
     ("windows-x64", "Windows", "10 et 11, 64 bits"),
     ("linux-x64", "Linux", "x86_64"),
-    ("linux-x64-cuda", "Linux", "x86_64 avec carte NVIDIA (CUDA 12)"),
+    ("linux-x64-cuda", "Linux", "x86_64 avec carte NVIDIA (pilote NVIDIA seul requis)"),
 ]
 # Extension → (libellé, ordre).
 FORMATS = {
@@ -41,6 +41,12 @@ UPDATER = {
     "windows-x86_64": ("windows-x64", "-setup.exe"),
     "windows-x86_64-nsis": ("windows-x64", "-setup.exe"),
     "windows-x86_64-msi": ("windows-x64", ".msi"),
+}
+# Manifeste dédié à la variante CUDA (cuda/latest.json, endpoint posé au build de cette variante).
+UPDATER_CUDA = {
+    "linux-x86_64": ("linux-x64-cuda", ".rpm"),
+    "linux-x86_64-deb": ("linux-x64-cuda", ".deb"),
+    "linux-x86_64-rpm": ("linux-x64-cuda", ".rpm"),
 }
 
 
@@ -65,19 +71,25 @@ def main() -> None:
     def name(variant: str, ext: str) -> str:
         return f"Murmure-{version}-{variant}{ext}"
 
-    # Manifeste de mise à jour.
-    platforms = {}
-    for key, (variant, ext) in UPDATER.items():
-        n = name(variant, ext)
-        if n in files and f"{n}.sig" in files:
-            platforms[key] = {"signature": files[f"{n}.sig"].read_text().strip(), "url": f"{rel}/{n}"}
-    manifest = {
-        "version": version,
-        "notes": f"Murmure {version}",
-        "pub_date": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "platforms": platforms,
-    }
-    (out / "latest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False))
+    # Manifestes de mise à jour.
+    def manifest(mapping: dict) -> dict:
+        platforms = {}
+        for key, (variant, ext) in mapping.items():
+            n = name(variant, ext)
+            if n in files and f"{n}.sig" in files:
+                platforms[key] = {"signature": files[f"{n}.sig"].read_text().strip(), "url": f"{rel}/{n}"}
+        return {
+            "version": version,
+            "notes": f"Murmure {version}",
+            "pub_date": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "platforms": platforms,
+        }
+
+    (out / "latest.json").write_text(json.dumps(manifest(UPDATER), indent=2, ensure_ascii=False))
+    cuda = manifest(UPDATER_CUDA)
+    if cuda["platforms"]:
+        (out / "cuda").mkdir(exist_ok=True)
+        (out / "cuda" / "latest.json").write_text(json.dumps(cuda, indent=2, ensure_ascii=False))
 
     # Copies stables + page.
     latest_map, sections = [], []
