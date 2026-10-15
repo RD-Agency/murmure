@@ -316,7 +316,7 @@ impl ConsoleProgress {
 
     fn update(&self, downloaded: u64, total: u64) {
         let mb = |b: u64| b / 1_048_576;
-        let pct = if total > 0 { downloaded.min(total) * 100 / total } else { 0 };
+        let pct = (downloaded.min(total) * 100).checked_div(total).unwrap_or(0);
         let line = format!("{pct:>3} % · {} / {} Mo", mb(downloaded), mb(total));
         let mut out = std::io::stdout().lock();
         if self.tty {
