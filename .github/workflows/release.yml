@@ -24,7 +24,8 @@ concurrency:
 
 env:
   TAG: ${{ github.ref_name }}
-  # Défini → ggml désactive -march=native : binaire portable (base AVX2/FMA/F16C en x86).
+  # Défini → ggml désactive -march=native (binaire portable)… et, par défaut, AVX/AVX2/FMA/F16C avec.
+  # src-tauri/cmake/ggml-x86-64-v3.cmake (via src-tauri/.cargo/config.toml) les rétablit en x86-64.
   SOURCE_DATE_EPOCH: "1700000000"
   S3_ENDPOINT: https://s3.eu-west-par.io.cloud.ovh.net
   S3_REGION: eu-west-par
@@ -146,7 +147,8 @@ jobs:
         if: env.SELF_HOSTED != 'true'
         with:
           workspaces: src-tauri
-          key: ${{ matrix.suffix }}
+          # whisper-rs-sys ne se recompile pas quand la configuration CMake change : nouveau cache.
+          key: ${{ matrix.suffix }}-${{ hashFiles('src-tauri/cmake/**', 'src-tauri/.cargo/config.toml') }}
 
       - name: Environnement de la tour (CUDA local, cache de compilation persistant)
         if: env.SELF_HOSTED == 'true'
@@ -159,7 +161,14 @@ jobs:
           # /usr/local/cuda pointe vers CUDA 13 sur la tour : on impose les bibliothèques 12.9 au lien.
           echo "MURMURE_CUDA_LIB_DIR=/usr/local/cuda-12.9/lib64" >> "$GITHUB_ENV"
           echo "/usr/local/cuda-12.9/bin" >> "$GITHUB_PATH"
-          echo "CARGO_TARGET_DIR=$HOME/.cache/murmure-ci/target-${{ matrix.suffix }}" >> "$GITHUB_ENV"
+          T="$HOME/.cache/murmure-ci/target-${{ matrix.suffix }}"
+          echo "CARGO_TARGET_DIR=$T" >> "$GITHUB_ENV"
+          # whisper-rs-sys ne se recompile pas quand la configuration CMake de ggml change : on l'y force.
+          H="${{ hashFiles('src-tauri/cmake/**', 'src-tauri/.cargo/config.toml') }}"
+          if [ "$(cat "$T/.ggml-config" 2>/dev/null)" != "$H" ]; then
+            rm -rf "$T"/*/release/build/whisper-rs-sys-* "$T"/release/build/whisper-rs-sys-*
+            mkdir -p "$T" && echo "$H" > "$T/.ggml-config"
+          fi
           # CUDA 12.9 sait compiler pour Blackwell (RTX 50) en natif.
           echo "CMAKE_CUDA_ARCHITECTURES=75-real;86-real;89-real;120-real;120-virtual" >> "$GITHUB_ENV"
           echo "CMAKE_BUILD_PARALLEL_LEVEL=$(nproc)" >> "$GITHUB_ENV"
@@ -244,6 +253,16 @@ jobs:
             ARGS+=(--config "$RUNNER_TEMP/appimage.conf.json")
           fi
           pnpm tauri build "${ARGS[@]}"
+
+      - name: Vérifier les instructions SIMD de ggml (Linux)
+        # Garde-fou contre le retour du moteur scalaire (v0.1.4, ~160 s par dictée) : le code F16C de
+        # ggml (vcvtph2ps) n'existe que si cmake/ggml-x86-64-v3.cmake a été appliqué (0 sinon).
+        if: runner.os == 'Linux'
+        run: |
+          BIN="${CARGO_TARGET_DIR:-src-tauri/target}/${{ matrix.target }}/release/murmure"
+          N=$(objdump -d --no-show-raw-insn "$BIN" | grep -c 'vcvtph2ps' || true)
+          echo "vcvtph2ps : $N"
+          test "$N" -gt 0
 
       - name: Rassembler les installeurs
         shell: bash
