@@ -24,6 +24,13 @@ pub struct Transcript {
     pub words: Vec<crate::correction::WordConfidence>,
 }
 
+impl From<String> for Transcript {
+    /// Texte sans confiance par mot (moteur distant, tests).
+    fn from(text: String) -> Self {
+        Self { text, words: Vec::new() }
+    }
+}
+
 impl TranscribeOptions {
     /// Langue effective : `None` si absente, vide ou "auto".
     pub(crate) fn language_code(&self) -> Option<&str> {

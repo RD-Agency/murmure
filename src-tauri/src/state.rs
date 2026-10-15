@@ -5,6 +5,7 @@
 //! pendant un appel lent (chargement de modèle, réseau, collage).
 
 use crate::audio::Recorder;
+use crate::chunking::ChunkedSession;
 use crate::engine::LocalEngine;
 use crate::hotkey::HotkeyMachine;
 use crate::pipeline::Command;
@@ -40,6 +41,10 @@ impl Phase {
 pub struct Dictation {
     pub phase: Phase,
     pub recorder: Option<Recorder>,
+    /// Transcription au fil de l'enregistrement (moteur local) : segments déjà partis.
+    pub segments: Option<ChunkedSession>,
+    /// Annulation des transcriptions de la dictée en cours (segments, puis dernier segment).
+    pub cancel: Option<Arc<AtomicBool>>,
     pub started_at: Option<Instant>,
     /// Mains libres : l'enregistrement continue sans maintenir la touche.
     pub hands_free: bool,
@@ -48,9 +53,30 @@ pub struct Dictation {
     pub generation: u64,
 }
 
+impl Dictation {
+    /// Fin de session : enregistrement et segments abandonnés, transcriptions en cours annulées.
+    pub fn reset(&mut self) {
+        self.recorder = None;
+        self.segments = None;
+        if let Some(c) = self.cancel.take() {
+            c.store(true, Ordering::Relaxed);
+        }
+        self.started_at = None;
+        self.hands_free = false;
+    }
+}
+
 impl Default for Dictation {
     fn default() -> Self {
-        Self { phase: Phase::Idle, recorder: None, started_at: None, hands_free: false, generation: 0 }
+        Self {
+            phase: Phase::Idle,
+            recorder: None,
+            segments: None,
+            cancel: None,
+            started_at: None,
+            hands_free: false,
+            generation: 0,
+        }
     }
 }
 

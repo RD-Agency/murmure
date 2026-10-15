@@ -5,11 +5,15 @@
 //! dédié (« murmure-audio »), piloté par channel. Ce thread :
 //! - reçoit du callback temps réel des blocs mono au taux natif ;
 //! - calcule le niveau et appelle `on_level` ~30 fois/s (donc hors thread temps réel) ;
-//! - au `stop()`, coupe le flux puis rééchantillonne le tout en 16 kHz (rubato).
+//! - rééchantillonne en 16 kHz (rubato) au fil de l'eau et transmet l'audio converti à `on_audio`,
+//!   si fourni (découpage pendant l'enregistrement) ;
+//! - au `stop()`, coupe le flux, vide le rééchantillonneur et renvoie tout l'audio en 16 kHz.
 
 use anyhow::{anyhow, bail, Context};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample, SampleFormat, SizedSample, StreamConfig};
+use crate::audio_file::StreamResampler;
+#[cfg(test)]
 use rubato::{FftFixedIn, Resampler};
 use serde::Serialize;
 use std::sync::mpsc::{self, RecvTimeoutError, TryRecvError};
@@ -118,6 +122,9 @@ enum Command {
     Stop,
 }
 
+/// Reçoit l'audio converti en mono 16 kHz pendant l'enregistrement (thread audio).
+pub type AudioSink = Box<dyn FnMut(&[f32]) + Send>;
+
 /// Enregistrement en cours. `Send` : ne contient qu'un channel et un JoinHandle.
 pub struct Recorder {
     cmd_tx: Option<mpsc::Sender<Command>>,
@@ -130,13 +137,24 @@ impl Recorder {
         device: Option<&str>,
         on_level: impl Fn(f32) + Send + 'static,
     ) -> anyhow::Result<Recorder> {
+        Self::start_with_sink(device, on_level, None)
+    }
+
+    /// Comme [`Recorder::start`], et `on_audio` reçoit l'audio en mono 16 kHz au fil de l'eau.
+    /// `stop()` renvoie toujours l'audio complet ; sa fin (vidange du rééchantillonneur) n'est pas
+    /// transmise à `on_audio`.
+    pub fn start_with_sink(
+        device: Option<&str>,
+        on_level: impl Fn(f32) + Send + 'static,
+        on_audio: Option<AudioSink>,
+    ) -> anyhow::Result<Recorder> {
         let device = device.map(str::to_owned).filter(|d| !d.trim().is_empty());
         let (cmd_tx, cmd_rx) = mpsc::channel::<Command>();
         let (ready_tx, ready_rx) = mpsc::sync_channel::<anyhow::Result<()>>(1);
 
         let worker = thread::Builder::new()
             .name("murmure-audio".into())
-            .spawn(move || capture_thread(device, on_level, cmd_rx, ready_tx))
+            .spawn(move || capture_thread(device, on_level, on_audio, cmd_rx, ready_tx))
             .context("Impossible de lancer le thread audio")?;
 
         // On attend que le flux soit réellement démarré pour remonter les erreurs tôt.
@@ -178,6 +196,7 @@ impl Drop for Recorder {
 fn capture_thread(
     device_name: Option<String>,
     on_level: impl Fn(f32),
+    mut on_audio: Option<AudioSink>,
     cmd_rx: mpsc::Receiver<Command>,
     ready_tx: mpsc::SyncSender<anyhow::Result<()>>,
 ) -> anyhow::Result<Vec<f32>> {
@@ -192,7 +211,8 @@ fn capture_thread(
     };
     let _ = ready_tx.send(Ok(()));
 
-    let mut native: Vec<f32> = Vec::with_capacity(native_rate as usize * 30);
+    let mut resampler = StreamResampler::new(native_rate)?;
+    let mut audio: Vec<f32> = Vec::with_capacity(TARGET_RATE as usize * 30);
     let mut meter = LevelMeter::default();
     let mut last_emit = Instant::now();
     let stopped = loop {
@@ -204,7 +224,13 @@ fn capture_thread(
         match data_rx.recv_timeout(Duration::from_millis(10)) {
             Ok(chunk) => {
                 meter.feed(&chunk);
-                native.extend_from_slice(&chunk);
+                let from = audio.len();
+                resampler.push(&chunk, &mut audio)?;
+                if let Some(sink) = on_audio.as_mut()
+                    && audio.len() > from
+                {
+                    sink(&audio[from..]);
+                }
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break true,
@@ -221,10 +247,11 @@ fn capture_thread(
         return Ok(Vec::new()); // annulation : inutile de rééchantillonner
     }
     while let Ok(chunk) = data_rx.try_recv() {
-        native.extend_from_slice(&chunk);
+        resampler.push(&chunk, &mut audio)?;
     }
     on_level(0.0);
-    resample_to_16k(&native, native_rate)
+    resampler.finish(&mut audio)?;
+    Ok(audio)
 }
 
 /// Ouvre le périphérique (par nom, sinon défaut) et démarre un flux mono f32.
@@ -365,7 +392,9 @@ pub(crate) fn rms_to_level(rms: f32) -> f32 {
 }
 
 /// Rééchantillonne un signal mono vers 16 kHz (FFT avec filtre anti-repliement).
-/// La longueur de sortie vaut `len * 16000 / rate` (latence du filtre compensée).
+/// La longueur de sortie vaut `len * 16000 / rate` (latence du filtre compensée). Référence des
+/// tests : la capture passe par [`StreamResampler`], bloc par bloc.
+#[cfg(test)]
 pub(crate) fn resample_to_16k(input: &[f32], rate: u32) -> anyhow::Result<Vec<f32>> {
     if rate == TARGET_RATE || input.is_empty() {
         return Ok(input.to_vec());
@@ -451,6 +480,27 @@ mod tests {
         let out = resample_to_16k(&vec![0.1; 300], 48_000).unwrap();
         assert_eq!(out.len(), 100);
         assert_eq!(resample_to_16k(&[0.2; 10], 16_000).unwrap().len(), 10);
+    }
+
+    /// Au fil de l'eau, par blocs irréguliers comme ceux du micro : même sortie que d'un bloc.
+    #[test]
+    fn reechantillonnage_au_fil_de_l_eau() {
+        for rate in [48_000, 44_100, 16_000] {
+            let input = sine(rate, 440.0, 2.3);
+            let whole = resample_to_16k(&input, rate).unwrap();
+            let mut rs = StreamResampler::new(rate).unwrap();
+            let mut out = Vec::new();
+            let mut lens = Vec::new();
+            for (i, block) in input.chunks(441 + 37).enumerate() {
+                rs.push(block, &mut out).unwrap();
+                lens.push(out.len());
+                assert!(out.len() <= whole.len(), "{rate} Hz, bloc {i}");
+            }
+            rs.finish(&mut out).unwrap();
+            assert_eq!(out, whole, "{rate} Hz");
+            // La sortie arrive pendant l'enregistrement, pas seulement à la fin.
+            assert!(lens[lens.len() / 2] > 0);
+        }
     }
 
     #[test]

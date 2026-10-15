@@ -7,7 +7,8 @@
 //! du raccourci. La transcription est lancée en tâche async (locale dans
 //! `spawn_blocking`, distante en async) pour ne pas bloquer la file.
 
-use crate::audio::{self, Recorder};
+use crate::audio::{self, AudioSink, Recorder};
+use crate::chunking::{ChunkedSession, SegmentConfig, SegmentFn};
 use crate::engine::{LocalEngine, RemoteEngine, TranscribeOptions, Transcript};
 use crate::history::{self, NewDictation};
 use crate::inject::{self, Outcome};
@@ -16,7 +17,7 @@ use crate::state::{AppState, LoadedEngine, Phase};
 use crate::{hotkey, install, models, overlay, tray};
 use serde::Serialize;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
@@ -109,9 +110,7 @@ fn finish_idle(app: &AppHandle, generation: u64, message: Option<&str>) {
             return;
         }
         d.phase = Phase::Idle;
-        d.recorder = None;
-        d.started_at = None;
-        d.hands_free = false;
+        d.reset();
     }
     emit_state(app, "idle", message, None);
     overlay::hide(app);
@@ -125,9 +124,7 @@ fn fail(app: &AppHandle, message: &str) {
     let generation = {
         let mut d = state.dictation.lock();
         d.phase = Phase::Idle;
-        d.recorder = None;
-        d.started_at = None;
-        d.hands_free = false;
+        d.reset();
         d.generation += 1;
         d.generation
     };
@@ -219,7 +216,13 @@ fn start(app: &AppHandle, hands_free: bool) {
         let _ = level_app.emit("audio-level", level.clamp(0.0, 1.0));
     };
 
-    let recorder = match Recorder::start(settings.input_device.as_deref(), on_level) {
+    // Moteur local : les segments partent en transcription pendant l'enregistrement.
+    let cancel = Arc::new(AtomicBool::new(false));
+    let segments = (settings.engine == EngineKind::Local && chunking_enabled())
+        .then(|| start_segments(app, &settings, cancel.clone()))
+        .flatten();
+    let sink = segments.as_ref().map(|s| Box::new(s.sink()) as AudioSink);
+    let recorder = match Recorder::start_with_sink(settings.input_device.as_deref(), on_level, sink) {
         Ok(r) => r,
         Err(e) => {
             fail(app, &format!("Micro indisponible : {e}"));
@@ -230,6 +233,8 @@ fn start(app: &AppHandle, hands_free: bool) {
         let mut d = state.dictation.lock();
         d.phase = Phase::Recording;
         d.recorder = Some(recorder);
+        d.segments = segments;
+        d.cancel = Some(cancel);
         d.started_at = Some(Instant::now());
         d.hands_free = hands_free;
         d.generation += 1;
@@ -286,6 +291,42 @@ impl AutoStop {
     }
 }
 
+/// Transcription par segments pendant l'enregistrement, sauf `MURMURE_CHUNKING=0` (diagnostic).
+fn chunking_enabled() -> bool {
+    std::env::var("MURMURE_CHUNKING").map_or(true, |v| v.trim() != "0")
+}
+
+/// Démarre la transcription au fil de l'enregistrement avec le moteur local.
+fn start_segments(app: &AppHandle, settings: &Settings, cancel: Arc<AtomicBool>) -> Option<ChunkedSession> {
+    let (opts, _) = transcribe_options(settings);
+    let app = app.clone();
+    let id = settings.local_model.clone();
+    let transcribe: Box<SegmentFn> = Box::new(move |samples, opts, cancel| {
+        let engine = ensure_local_engine(&app, &id)?;
+        engine
+            .transcribe_cancellable(samples, opts, cancel.clone())
+            .map_err(|e| format!("Échec de la transcription : {e}"))
+    });
+    let cfg = SegmentConfig::for_engine(crate::engine::local::gpu_available());
+    ChunkedSession::start(cfg, opts, cancel, transcribe)
+        .inspect_err(|e| log::warn!("transcription par segments indisponible : {e}"))
+        .ok()
+}
+
+/// Options de transcription des réglages, et ponctuation dictée active ou non.
+fn transcribe_options(settings: &Settings) -> (TranscribeOptions, bool) {
+    let spoken_punctuation = settings.spoken_punctuation && matches!(settings.language.trim(), "fr" | "auto" | "");
+    let opts = TranscribeOptions {
+        language: match settings.language.trim() {
+            "" | "auto" => None,
+            l => Some(l.to_string()),
+        },
+        // Vocabulaire des commandes seulement en français fixé : en détection auto, il biaiserait la langue.
+        initial_prompt: initial_prompt(&settings.initial_prompt, spoken_punctuation && settings.language.trim() == "fr"),
+    };
+    (opts, spoken_punctuation)
+}
+
 fn set_hands_free(app: &AppHandle) {
     let state = app.state::<AppState>();
     {
@@ -300,13 +341,14 @@ fn set_hands_free(app: &AppHandle) {
 
 fn stop(app: &AppHandle) {
     let state = app.state::<AppState>();
-    let (recorder, started_at, generation) = {
+    let (recorder, segments, cancel, started_at, generation) = {
         let mut d = state.dictation.lock();
         if d.phase != Phase::Recording {
             return;
         }
         d.phase = Phase::Transcribing;
-        (d.recorder.take(), d.started_at.take(), d.generation)
+        let cancel = d.cancel.clone().unwrap_or_default();
+        (d.recorder.take(), d.segments.take(), cancel, d.started_at.take(), d.generation)
     };
     hotkey::unregister_escape(app);
     let settings = state.settings();
@@ -361,7 +403,7 @@ fn stop(app: &AppHandle) {
     let duration_ms = duration.as_millis() as u64;
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        transcribe_and_deliver(app, samples, settings, generation, duration_ms).await;
+        transcribe_and_deliver(app, samples, segments, cancel, settings, generation, duration_ms).await;
     });
 }
 
@@ -373,8 +415,12 @@ fn cancel(app: &AppHandle) {
         if phase == Phase::Idle {
             return;
         }
-        // Invalide la session : un résultat en vol sera ignoré.
+        // Invalide la session : un résultat en vol sera ignoré, les segments en cours interrompus.
         d.generation += 1;
+        if let Some(c) = &d.cancel {
+            c.store(true, Ordering::Relaxed);
+        }
+        d.segments = None;
         (d.recorder.take(), phase, d.generation)
     };
     hotkey::unregister_escape(app);
@@ -391,20 +437,15 @@ fn cancel(app: &AppHandle) {
 async fn transcribe_and_deliver(
     app: AppHandle,
     samples: Vec<f32>,
+    segments: Option<ChunkedSession>,
+    cancel: Arc<AtomicBool>,
     settings: Settings,
     generation: u64,
     duration_ms: u64,
 ) {
     let state = app.state::<AppState>();
-    let spoken_punctuation = settings.spoken_punctuation && matches!(settings.language.trim(), "fr" | "auto" | "");
-    let opts = TranscribeOptions {
-        language: match settings.language.trim() {
-            "" | "auto" => None,
-            l => Some(l.to_string()),
-        },
-        // Vocabulaire des commandes seulement en français fixé : en détection auto, il biaiserait la langue.
-        initial_prompt: initial_prompt(&settings.initial_prompt, spoken_punctuation && settings.language.trim() == "fr"),
-    };
+    let (opts, spoken_punctuation) = transcribe_options(&settings);
+    // Latence perçue : du relâchement au texte.
     let t0 = Instant::now();
     // Partagé avec l'historique (audio de la dictée).
     let samples = Arc::new(samples);
@@ -414,8 +455,24 @@ async fn transcribe_and_deliver(
             let id = settings.local_model.clone();
             let samples = samples.clone();
             let res = tauri::async_runtime::spawn_blocking(move || {
+                if let Some(segments) = segments {
+                    let sent = segments.segments_sent();
+                    match segments.finish(&samples) {
+                        Ok(text) => {
+                            log::info!(
+                                "transcription par segments : {sent} pendant l'enregistrement, fin en {} ms",
+                                t0.elapsed().as_millis()
+                            );
+                            return Ok(text);
+                        }
+                        Err(_) if cancel.load(Ordering::Relaxed) => return Err("Transcription annulée".to_string()),
+                        Err(e) => log::warn!("transcription par segments en échec ({e}) : transcription d'un bloc"),
+                    }
+                }
                 let engine = ensure_local_engine(&app2, &id)?;
-                engine.transcribe_detailed(&samples, &opts).map_err(|e| format!("Échec de la transcription : {e}"))
+                engine
+                    .transcribe_cancellable(&samples, &opts, cancel)
+                    .map_err(|e| format!("Échec de la transcription : {e}"))
             })
             .await
             .map_err(|e| format!("Échec de la transcription : {e}"))

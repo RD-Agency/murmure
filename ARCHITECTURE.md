@@ -61,7 +61,8 @@ src-tauri/src/
   history/audio.rs        audio des dictées : Ogg Opus (libopus liée statiquement)
   correction.rs           corrections : mots douteux, règles de remplacement, diff des corrections
   settings.rs             réglages (settings.json) et clé API dans le trousseau
-  audio.rs                capture du micro (cpal), conversion en mono 16 kHz, niveau sonore
+  audio.rs                capture du micro (cpal), conversion en mono 16 kHz au fil de l'eau, niveau sonore
+  chunking.rs             découpage sur les silences, transcription par segments pendant l'enregistrement
   models.rs               catalogue des modèles, téléchargement vérifié
   install.rs              installation automatique du modèle, option --install-model
   updater.rs              mises à jour automatiques
@@ -78,17 +79,20 @@ tests/wayland-kde/        test d'intégration du portail des raccourcis sous KDE
 ## Déroulement d'une dictée
 
 ```
-raccourci pressé   ─► état recording, pastille visible, son de départ, Recorder::start
+raccourci pressé   ─► état recording, pastille visible, son de départ, Recorder::start_with_sink
+                   ─► moteur local : ChunkedSession, les segments terminés partent en transcription
+                      pendant que l'on parle (voir « Découpage pendant l'enregistrement »)
 raccourci relâché  ─► mode hybride : appui de moins de 300 ms → mains libres, on attend un second appui
                    ─► Recorder::stop ─► état transcribing
-                   ─► LocalEngine::transcribe (thread bloquant) ou RemoteEngine::transcribe (async)
-                   ─► correction::finalize : mots douteux corrigés d'après le vocabulaire (moteur local),
-                      puis postprocess::finalize (espaces, mot de validation, ponctuation dictée, textes
-                      courts), puis règles de remplacement
+                   ─► local : ChunkedSession::finish (dernier segment seulement, thread bloquant) ;
+                      serveur : RemoteEngine::transcribe sur toute la dictée (async)
+                   ─► correction::finalize sur le texte assemblé : mots douteux corrigés d'après le
+                      vocabulaire (moteur local), puis postprocess::finalize (espaces, mot de validation,
+                      ponctuation dictée, textes courts), puis règles de remplacement
                    ─► inject::deliver (collage, puis Entrée si mot de validation) ─► état idle
                    ─► history::record en tâche de fond : encodage Opus, base SQLite, plafond audio
                    ─► événement dictation-result
-Échap pendant l'enregistrement ─► cancel_dictation (X11, macOS, Windows)
+Échap pendant l'enregistrement ─► cancel_dictation (X11, macOS, Windows), segments en cours compris
 silence prolongé en bascule ou mains libres ─► Stop, comme un second appui
 enregistrement de moins de 250 ms, ou silence ─► abandon sans message
 ```
@@ -295,6 +299,9 @@ pub fn list_input_devices() -> Vec<AudioDevice>;
 impl Recorder {
     /// Démarre la capture ; `on_level` est appelé environ 30 fois par seconde, hors du thread temps réel.
     pub fn start(device: Option<&str>, on_level: impl Fn(f32) + Send + 'static) -> anyhow::Result<Recorder>;
+    /// Idem, et `on_audio` reçoit l'audio en mono 16 kHz au fil de l'eau (sauf la vidange finale du filtre).
+    pub fn start_with_sink(device: Option<&str>, on_level: impl Fn(f32) + Send + 'static,
+                           on_audio: Option<AudioSink>) -> anyhow::Result<Recorder>;
     /// Arrête et renvoie l'audio en mono 16 kHz, f32.
     pub fn stop(self) -> anyhow::Result<Vec<f32>>;
 }
@@ -316,13 +323,33 @@ impl LocalEngine {
     pub fn transcribe(&self, samples: &[f32], opts: &TranscribeOptions) -> anyhow::Result<String>;
     /// Mots et confiance (probabilité la plus faible des tokens du mot, tokens spéciaux exclus).
     pub fn transcribe_detailed(&self, samples: &[f32], opts: &TranscribeOptions) -> anyhow::Result<Transcript>;
+    /// Comme `transcribe_detailed`, interrompue (erreur) dès que `cancel` passe à vrai.
+    pub fn transcribe_cancellable(&self, samples: &[f32], opts: &TranscribeOptions,
+                                  cancel: Arc<AtomicBool>) -> anyhow::Result<Transcript>;
 }
 impl RemoteEngine {
     pub async fn transcribe(&self, samples: &[f32], opts: &TranscribeOptions) -> anyhow::Result<String>;
     pub async fn test(&self) -> anyhow::Result<String>;            // envoie une seconde de silence
 }
 pub fn encode_wav(samples: &[f32]) -> Vec<u8>;                     // PCM 16 bits, mono, 16 kHz
+
+// chunking.rs
+pub fn split_on_silence(samples: &[f32], cfg: SegmentConfig) -> Vec<Segment>;  // audio complet, 16 kHz
+pub fn transcribe_segments(samples: &[f32], segments: &[Segment], opts: &TranscribeOptions,
+    transcribe: impl FnMut(&[f32], &TranscribeOptions) -> Result<String, String>) -> Result<String, String>;
+pub fn join(prev: &str, next: &str, overlap: bool) -> String;     // jointure et dédoublonnage
+impl ChunkedSession {
+    pub fn start(cfg: SegmentConfig, opts: TranscribeOptions, cancel: Arc<AtomicBool>,
+                 transcribe: Box<SegmentFn>) -> anyhow::Result<ChunkedSession>;
+    pub fn sink(&self) -> impl FnMut(&[f32]) + Send + 'static;     // pour Recorder::start_with_sink
+    pub fn finish(self, full: &[f32]) -> Result<String, String>;    // bloquant ; drop = annulation
+}
 ```
+
+`chunking::split_on_silence` et `transcribe_segments` appliquent à un audio complet (mono 16 kHz) les
+règles de la dictée : coupe sur les silences, recouvrement, prompt de continuité, jointure. La
+transcription de fichiers a son propre découpage (`audio_file::split_on_silence`, segments d'environ
+20 s) ; elle peut passer à celui-ci si l'on veut le même comportement que la dictée.
 
 `models::download` vérifie l'espace disque avant de commencer, reprend un fichier `.part` interrompu
 (requête `Range`), calcule le SHA-256 au fil de l'eau et contrôle taille et empreinte à la fin. Après une
@@ -545,6 +572,50 @@ deux modes.
 Avec le vocabulaire dans le prompt (usage normal), Whisper ne doute presque plus : aucune correction sous
 0,8 sur ce corpus. Les erreurs restantes sont sûres d'elles (« l'affirmation » à 1,0) : elles relèvent des
 règles de remplacement, que l'historique propose de créer.
+
+## Découpage pendant l'enregistrement (`chunking.rs`)
+
+Avec le moteur local, la dictée est transcrite par segments pendant que l'on parle. Au relâchement, il ne
+reste que le dernier segment à transcrire : l'attente ne grandit plus avec la durée de la dictée.
+
+- **Détection de la voix** : énergie RMS par trame de 30 ms. Une trame est de la parole si elle dépasse
+  d'environ 10 dB le plancher de bruit, et 0,002 en absolu. Le plancher descend vite vers les trames
+  calmes et remonte lentement (environ une minute) ; il part au plus de 0,003, si bien qu'une dictée qui
+  commence par la voix ne le fige pas à son niveau.
+- **Coupe sur silence** : une fois le segment long de 15 s, le premier silence de 500 ms le termine (coupe
+  au milieu du silence). Le segment part aussitôt dans le thread `murmure-segments`.
+- **Coupe forcée** : sans silence, le segment est coupé à 28 s au plus tard, sous la fenêtre de 30 s de
+  Whisper. La coupe tombe au milieu de la plus longue pause des 4 dernières secondes si elle dure au moins
+  150 ms ; sinon à la trame la plus calme, avec 1 s de recouvrement. À la jointure, `join` ne garde qu'une
+  fois les mots répétés (version du segment suivant, en tolérant les mots tronqués par la coupe).
+- **Continuité** : chaque segment reçoit en prompt initial le vocabulaire de l'utilisateur, `PROMPT_FR`,
+  puis les 30 derniers mots déjà transcrits. Whisper garde ainsi les majuscules et le fil de la phrase.
+  `join` remet en minuscule un mot-outil capitalisé en tête de segment et retire le point ajouté par
+  Whisper quand la phrase continue.
+- **Ponctuation dictée** : appliquée au texte brut assemblé, jamais par segment. Une commande à cheval sur
+  une coupe (« point » puis « à la ligne ») est donc reconnue.
+- **Annulation** : Échap ou `cancel_dictation` lèvent le drapeau d'annulation de la dictée ; whisper.cpp
+  l'interroge pendant le calcul (rappel d'abandon) et s'arrête.
+- **Repli** : si un segment échoue, la dictée entière est transcrite d'un bloc au relâchement, comme avant.
+  `MURMURE_CHUNKING=0` désactive le découpage (diagnostic).
+- **Sur processeur** (`SegmentConfig::cpu`, choisi quand aucun GPU n'est détecté) : chaque appel à Whisper
+  y coûte une fenêtre de 30 s entière, environ 7 s sur 8 threads d'un Ryzen 9 9950X, quelle que soit la
+  durée du segment. Couper une dictée de moins de 30 s ne ferait qu'ajouter un appel. La coupe n'a donc
+  lieu qu'à 28 s, au milieu de la plus longue pause des 8 dernières secondes (avec 1 s de recouvrement
+  s'il n'y en a aucune de 150 ms).
+- Une dictée de moins de 15 s (28 s sur processeur) n'est jamais coupée : elle est transcrite exactement
+  comme avant.
+
+**Moteur Serveur : envoi unique.** Le moteur serveur envoie toujours la dictée entière au relâchement.
+Raisons :
+- les serveurs compatibles OpenAI gèrent eux-mêmes l'audio de plus de 30 s : notre serveur
+  (faster-whisper) garde les timestamps et filtre les silences ; il ne souffre pas du défaut corrigé côté
+  local ;
+- sur GPU, un serveur transcrit une minute de parole en une à deux secondes : il y aurait peu à gagner ;
+- par segments, une dictée ferait plusieurs requêtes : plus de coupures réseau possibles en cours de
+  dictée, des quotas atteints plus vite, et certains services facturent une durée minimale par requête
+  (10 s chez Groq) ;
+- le serveur perdrait le contexte entre segments, sauf par le prompt, limité à 224 jetons.
 
 ## Ponctuation dictée (`punctuation.rs`)
 
