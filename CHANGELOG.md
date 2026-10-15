@@ -1,5 +1,11 @@
 # Historique des versions
 
+## Non publié
+
+- Dictées de plus de 30 s : le moteur local ne perd plus de mots à la jonction des fenêtres de
+  Whisper (WER de 16,6 % à 9,1 % sur des dictées de 35 à 48 s, RTX 5060). Les dictées plus courtes
+  ne changent pas.
+
 ## 0.1.6 — 15 octobre 2026
 
 - Transcription sur processeur environ dix fois plus rapide : les versions pour PC (Linux, Windows, Mac
