@@ -191,6 +191,7 @@ export function formatSize(mb: number): string {
 }
 
 export function formatBytes(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.max(bytes > 0 ? 1 : 0, Math.round(bytes / 1024))} Ko`;
   return formatSize(bytes / (1024 * 1024));
 }
 

@@ -9,8 +9,8 @@
 
 use crate::audio::{self, AudioSink, Recorder};
 use crate::chunking::{ChunkedSession, SegmentConfig, SegmentFn};
-use crate::engine::{LocalEngine, RemoteEngine, TranscribeOptions};
-use crate::history::{self, HistoryEntry};
+use crate::engine::{LocalEngine, RemoteEngine, TranscribeOptions, Transcript};
+use crate::history::{self, NewDictation};
 use crate::inject::{self, Outcome};
 use crate::settings::{EngineKind, Settings};
 use crate::state::{AppState, LoadedEngine, Phase};
@@ -447,10 +447,13 @@ async fn transcribe_and_deliver(
     let (opts, spoken_punctuation) = transcribe_options(&settings);
     // Latence perçue : du relâchement au texte.
     let t0 = Instant::now();
+    // Partagé avec l'historique (audio de la dictée).
+    let samples = Arc::new(samples);
     let (result, model) = match settings.engine {
         EngineKind::Local => {
             let app2 = app.clone();
             let id = settings.local_model.clone();
+            let samples = samples.clone();
             let res = tauri::async_runtime::spawn_blocking(move || {
                 if let Some(segments) = segments {
                     let sent = segments.segments_sent();
@@ -485,6 +488,7 @@ async fn transcribe_and_deliver(
             let res = engine
                 .transcribe(&samples, &opts)
                 .await
+                .map(|text| Transcript { text, words: Vec::new() })
                 .map_err(|e| format!("Échec de la transcription distante : {e}"));
             (res, settings.remote_model.clone())
         }
@@ -495,20 +499,14 @@ async fn transcribe_and_deliver(
         log::debug!("résultat ignoré (dictée annulée)");
         return;
     }
-    let submit_words: &[String] = if settings.submit_word_enabled { &settings.submit_words } else { &[] };
-    let post = crate::postprocess::Options {
-        spoken_punctuation,
-        short_text_plain: settings.short_text_plain,
-        submit_words,
-        vocabulary: &settings.initial_prompt,
-    };
-    let crate::postprocess::Finalized { text, submit } = match result {
-        Ok(t) => crate::postprocess::finalize(&t, &post),
+    let processed = match result {
+        Ok(t) => crate::correction::finalize(&t, &settings, spoken_punctuation),
         Err(msg) => {
             fail(&app, &msg);
             return;
         }
     };
+    let (text, submit) = (processed.text.clone(), processed.submit);
     if text.is_empty() && !submit {
         finish_idle(&app, generation, None);
         return;
@@ -530,20 +528,18 @@ async fn transcribe_and_deliver(
         return;
     }
 
-    let entry = HistoryEntry::new(text, duration_ms, latency_ms, settings.engine, model);
-    if settings.history_enabled {
-        let data_dir = state.data_dir.clone();
-        let e2 = entry.clone();
-        let saved = tauri::async_runtime::spawn_blocking(move || history::add(&data_dir, e2)).await;
-        match saved {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => log::warn!("historique : {e}"),
-            Err(e) => log::warn!("historique : {e}"),
-        }
-    }
-    if let Err(e) = app.emit("dictation-result", &entry) {
-        log::warn!("émission dictation-result : {e}");
-    }
+    // Historique (texte, audio Opus) en tâche de fond, puis événement `dictation-result`.
+    let dictation = NewDictation {
+        raw_text: processed.raw_text,
+        final_text: text,
+        duration_ms,
+        latency_ms,
+        engine: settings.engine,
+        model,
+        language: settings.language.trim().to_string(),
+        auto_corrections: processed.auto_corrections,
+    };
+    history::record(&app, &settings, dictation, samples);
 
     match outcome {
         Ok(Outcome::Pasted) | Ok(Outcome::Copied) => finish_idle(&app, generation, None),

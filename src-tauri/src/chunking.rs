@@ -16,7 +16,7 @@
 //! [`split_on_silence`] et [`transcribe_segments`] découpent et transcrivent un audio déjà complet
 //! (fichier audio), avec les mêmes règles.
 
-use crate::engine::TranscribeOptions;
+use crate::engine::{self, TranscribeOptions};
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
@@ -466,16 +466,18 @@ fn find_overlap(prev: &[&str], next: &[&str]) -> Option<(usize, usize, usize)> {
 }
 
 /// Transcription d'un segment pendant l'enregistrement : audio, options, drapeau d'annulation.
-pub type SegmentFn = dyn FnMut(&[f32], &TranscribeOptions, &Arc<AtomicBool>) -> Result<String, String> + Send;
+pub type SegmentFn =
+    dyn FnMut(&[f32], &TranscribeOptions, &Arc<AtomicBool>) -> Result<engine::Transcript, String> + Send;
 
 /// Une dictée transcrite au fil de l'enregistrement. L'audio arrive par [`ChunkedSession::sink`]
 /// (thread audio) ; les segments terminés sont transcrits dans l'ordre par un thread de fond ;
-/// [`ChunkedSession::finish`] transcrit le dernier et renvoie le texte brut assemblé. Abandonner
+/// [`ChunkedSession::finish`] transcrit le dernier et renvoie le texte brut assemblé, avec la
+/// confiance des mots de tous les segments. Abandonner
 /// la session (drop) annule les transcriptions en cours.
 pub struct ChunkedSession {
     feeder: Arc<Mutex<Feeder>>,
     cancel: Arc<AtomicBool>,
-    worker: Option<JoinHandle<Result<String, String>>>,
+    worker: Option<JoinHandle<Result<engine::Transcript, String>>>,
 }
 
 struct Feeder {
@@ -527,6 +529,7 @@ impl ChunkedSession {
         let flag = cancel.clone();
         let worker = std::thread::Builder::new().name("murmure-segments".into()).spawn(move || {
             let mut text = Transcript::default();
+            let mut words = Vec::new();
             for (n, job) in rx.into_iter().enumerate() {
                 if flag.load(Ordering::Relaxed) {
                     return Err("transcription annulée".to_string());
@@ -539,9 +542,11 @@ impl ChunkedSession {
                     job.samples.len() as f32 / SAMPLE_RATE as f32,
                     started.elapsed().as_millis()
                 );
-                text.push(&part, job.overlap);
+                text.push(&part.text, job.overlap);
+                // Les mots du recouvrement sont en double : l'alignement de la correction les saute.
+                words.extend(part.words);
             }
-            Ok(text.into_text())
+            Ok(engine::Transcript { text: text.into_text(), words })
         })?;
         let feeder = Feeder { segmenter: Segmenter::new(cfg), audio: Vec::new(), jobs: Some(tx), sent: 0 };
         Ok(Self { feeder: Arc::new(Mutex::new(feeder)), cancel, worker: Some(worker) })
@@ -565,7 +570,7 @@ impl ChunkedSession {
 
     /// Envoie le dernier segment (jusqu'à la fin de `full`, l'audio complet de la dictée) et attend
     /// le texte brut assemblé. Bloquant.
-    pub fn finish(mut self, full: &[f32]) -> Result<String, String> {
+    pub fn finish(mut self, full: &[f32]) -> Result<engine::Transcript, String> {
         {
             let mut f = self.feeder.lock();
             // Fin de l'audio que le thread audio n'a pas transmise (vidange du rééchantillonneur).
@@ -824,7 +829,7 @@ mod tests {
         let f = move |s: &[f32], o: &TranscribeOptions, _: &Arc<AtomicBool>| {
             seen.lock().push((s.len(), o.initial_prompt.clone()));
             n += 1;
-            Ok(texts[(n - 1).min(texts.len() - 1)].to_string())
+            Ok(texts[(n - 1).min(texts.len() - 1)].to_string().into())
         };
         (Box::new(f), calls)
     }
@@ -842,7 +847,7 @@ mod tests {
             sink(block);
         }
         assert_eq!(session.segments_sent(), 2, "deux segments partis pendant l'enregistrement");
-        let text = session.finish(&audio).unwrap();
+        let text = session.finish(&audio).unwrap().text;
         assert_eq!(text, "Bonjour Maître. Je vous écris au sujet du dossier.");
         let calls = calls.lock();
         assert_eq!(calls.len(), 3);
@@ -857,7 +862,7 @@ mod tests {
         let (f, calls) = fake(vec!["Texte."]);
         let session = ChunkedSession::start(SegmentConfig::default(), TranscribeOptions::default(), Arc::default(), f).unwrap();
         session.sink()(&audio);
-        assert_eq!(session.finish(&audio).unwrap(), "Texte.");
+        assert_eq!(session.finish(&audio).unwrap().text, "Texte.");
         assert_eq!(calls.lock().clone(), vec![(audio.len(), None)]);
     }
 
@@ -877,7 +882,7 @@ mod tests {
                 }
                 std::thread::sleep(std::time::Duration::from_millis(2));
             }
-            Ok("trop tard".to_string())
+            Ok("trop tard".to_string().into())
         };
         let session = ChunkedSession::start(SegmentConfig::default(), TranscribeOptions::default(), Arc::default(), Box::new(f)).unwrap();
         session.sink()(&audio);

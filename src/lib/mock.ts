@@ -5,20 +5,26 @@
 
 import type {
   AudioDevice,
+  AudioUsage,
+  CorrectionResult,
   CommandMap,
   CommandName,
   DownloadStatus,
   EventMap,
   EventName,
   HistoryEntry,
+  HistoryPage,
+  HistoryQuery,
   ModelInfo,
   Permissions,
   Platform,
   Settings,
+  TermChange,
+  VocabularySuggestion,
   WaylandStatus,
 } from "./types";
 
-const STORAGE_KEY = "murmure-mock-v1";
+const STORAGE_KEY = "murmure-mock-v2";
 
 const DEFAULT_SETTINGS: Settings = {
   engine: "local",
@@ -41,6 +47,10 @@ const DEFAULT_SETTINGS: Settings = {
   sounds: true,
   launch_at_login: false,
   history_enabled: true,
+  keep_audio: true,
+  audio_cap_mb: 5120,
+  auto_correct: true,
+  replacements: [],
   onboarding_done: false,
   wayland_restore_token: null,
 };
@@ -98,43 +108,207 @@ const PHRASES = [
   "Très bonne présentation hier, les clients ont apprécié la démonstration en direct.",
 ];
 
+/** Dictées juridiques de démonstration : [texte collé, texte corrigé ou null]. */
+const LEGAL: [string, string | null][] = [
+  [
+    "Nous sollicitons en conséquence l'affirmation du jugement entrepris en toutes ses dispositions.",
+    "Nous sollicitons en conséquence l'infirmation du jugement entrepris en toutes ses dispositions.",
+  ],
+  [
+    "L'employeur n'a pas respecté la procédure prévue aux articles L 12 32 2 et suivants du code du travail.",
+    "L'employeur n'a pas respecté la procédure prévue aux articles L. 1232-2 et suivants du code du travail.",
+  ],
+  [
+    "La cour d'appel a prononcé l'affirmation partielle de la décision rendue en première instance.",
+    "La cour d'appel a prononcé l'infirmation partielle de la décision rendue en première instance.",
+  ],
+  ["Le dossier Lefebvre contre la société Batimex est renvoyé à l'audience de mise en état du 12 novembre.", null],
+];
+
 const DEVICES: AudioDevice[] = [
   { name: "Micro MacBook Pro", is_default: true },
   { name: "AirPods Pro", is_default: false },
   { name: "Shure MV7", is_default: false },
 ];
 
+interface MockCorrection {
+  entryId: string;
+  changes: TermChange[];
+}
+
 interface MockData {
   settings: Settings;
   downloaded: string[];
   history: HistoryEntry[];
+  corrections: MockCorrection[];
+  dismissed: string[];
   apiKey: string;
   permissions: Permissions;
 }
 
-function seedHistory(): HistoryEntry[] {
+/** Opus à 20 kbit/s : 2 500 octets par seconde. */
+const OPUS_BYTES_PER_MS = 2.5;
+
+function makeEntry(
+  id: string,
+  text: string,
+  createdAt: number,
+  opts: Partial<HistoryEntry> & { engine?: HistoryEntry["engine"] } = {},
+): HistoryEntry {
+  const words = text.split(/\s+/).length;
+  const duration = opts.duration_ms ?? Math.round(words * 380 + 600);
+  const engine = opts.engine ?? "local";
+  const hasAudio = opts.has_audio ?? true;
+  return {
+    id,
+    text,
+    created_at: new Date(createdAt).toISOString(),
+    duration_ms: duration,
+    latency_ms: opts.latency_ms ?? 300,
+    engine,
+    model: engine === "remote" ? "whisper-large-v3-turbo" : "large-v3-turbo-q5_0",
+    language: "fr",
+    raw_text: opts.raw_text ?? text.toLowerCase().replace(/[.,;:!?]/g, ""),
+    final_text: opts.final_text ?? text,
+    corrected_text: opts.corrected_text ?? null,
+    corrected_at: opts.corrected_at ?? null,
+    auto_corrections: opts.auto_corrections ?? [],
+    has_audio: hasAudio,
+    audio_bytes: hasAudio ? Math.round(duration * OPUS_BYTES_PER_MS) : 0,
+  };
+}
+
+function seedHistory(): { history: HistoryEntry[]; corrections: MockCorrection[] } {
   const now = Date.now();
-  const offsets = [4, 38, 95, 170, 26 * 60, 27 * 60, 50 * 60, 3 * 24 * 60, 4 * 24 * 60, 9 * 24 * 60];
-  return offsets.map((min, i) => {
-    const text = PHRASES[i % PHRASES.length];
-    const words = text.split(/\s+/).length;
-    return {
-      id: `seed-${i}`,
-      text,
-      created_at: new Date(now - min * 60_000).toISOString(),
-      duration_ms: Math.round(words * 380 + 600),
-      latency_ms: i % 4 === 3 ? 640 + i * 11 : 280 + ((i * 47) % 160),
-      engine: i % 4 === 3 ? "remote" : "local",
-      model: i % 4 === 3 ? "whisper-large-v3-turbo" : "large-v3-turbo-q5_0",
-    };
+  const history: HistoryEntry[] = [];
+  const corrections: MockCorrection[] = [];
+  LEGAL.forEach(([final, corrected], i) => {
+    const at = now - (12 + i * 41) * 60_000;
+    const id = `seed-legal-${i}`;
+    history.push(
+      makeEntry(id, corrected ?? final, at, {
+        final_text: final,
+        corrected_text: corrected,
+        corrected_at: corrected ? new Date(at + 90_000).toISOString() : null,
+        latency_ms: 290 + i * 23,
+        auto_corrections:
+          i === 3 ? [{ from: "Batimax", to: "Batimex", probability: 0.31 }] : [],
+      }),
+    );
+    if (corrected) corrections.push({ entryId: id, changes: diffWords(final, corrected) });
   });
+  const offsets = [4, 95, 170, 26 * 60, 27 * 60, 50 * 60, 3 * 24 * 60, 4 * 24 * 60, 9 * 24 * 60];
+  offsets.forEach((min, i) => {
+    history.push(
+      makeEntry(`seed-${i}`, PHRASES[i % PHRASES.length], now - min * 60_000, {
+        engine: i % 4 === 3 ? "remote" : "local",
+        latency_ms: i % 4 === 3 ? 640 + i * 11 : 280 + ((i * 47) % 160),
+        has_audio: i < 7,
+      }),
+    );
+  });
+  history.sort((a, b) => b.created_at.localeCompare(a.created_at));
+  return { history, corrections };
+}
+
+/** Diff mot à mot simplifié (préfixe et suffixe communs), comme `correction::word_diff`. */
+function diffWords(before: string, after: string): TermChange[] {
+  const a = before.split(/\s+/);
+  const b = after.split(/\s+/);
+  let p = 0;
+  while (p < a.length && p < b.length && a[p] === b[p]) p++;
+  let q = 0;
+  while (q < a.length - p && q < b.length - p && a[a.length - 1 - q] === b[b.length - 1 - q]) q++;
+  const wrong = a.slice(p, a.length - q).join(" ");
+  const right = b.slice(p, b.length - q).join(" ");
+  if (!wrong || !right || wrong.split(" ").length > 6 || right.split(" ").length > 6) return [];
+  const strip = (s: string) => s.replace(/^[ldjmnst]['’]/i, "").replace(/[.,;:!?]+$/, "");
+  return [{ wrong: strip(wrong), right: strip(right) }];
+}
+
+function normalize(s: string): string {
+  return s.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
+}
+
+function searchHistory(q: HistoryQuery): HistoryPage {
+  const terms = normalize(q.text).split(/\s+/).filter(Boolean);
+  const from = q.from ? new Date(`${q.from}T00:00:00`).getTime() : null;
+  const to = q.to ? new Date(`${q.to}T00:00:00`).getTime() + 86_400_000 : null;
+  const all = data.history.filter((h) => {
+    const t = new Date(h.created_at).getTime();
+    if (from !== null && t < from) return false;
+    if (to !== null && t >= to) return false;
+    const words = normalize(h.text).split(/[^\p{L}\p{N}]+/u);
+    return terms.every((term) => words.some((w) => w.startsWith(term.replace(/[^\p{L}\p{N}]/gu, ""))));
+  });
+  const offset = q.offset ?? 0;
+  return { entries: structuredClone(all.slice(offset, offset + (q.limit ?? 100))), total: all.length };
+}
+
+function suggestions(): VocabularySuggestion[] {
+  const counts = new Map<string, { count: number; variants: Set<string> }>();
+  for (const c of data.corrections) {
+    for (const ch of c.changes) {
+      const cur = counts.get(ch.right) ?? { count: 0, variants: new Set<string>() };
+      cur.count++;
+      cur.variants.add(ch.wrong);
+      counts.set(ch.right, cur);
+    }
+  }
+  const vocab = data.settings.initial_prompt.toLowerCase();
+  return [...counts.entries()]
+    .filter(([term, v]) => v.count >= 2 && !data.dismissed.includes(term) && !vocab.includes(term.toLowerCase()))
+    .filter(([term]) => !data.settings.replacements.some((r) => r.to.toLowerCase() === term.toLowerCase()))
+    .map(([term, v]) => ({ term, count: v.count, variants: [...v.variants] }));
+}
+
+function audioUsage(): AudioUsage {
+  const withAudio = data.history.filter((h) => h.has_audio);
+  return {
+    bytes: withAudio.reduce((n, h) => n + h.audio_bytes, 0),
+    files: withAudio.length,
+    cap_bytes: Math.min(Math.max(data.settings.audio_cap_mb, 100), 5120) * 1024 * 1024,
+    duration_ms: withAudio.reduce((n, h) => n + h.duration_ms, 0),
+  };
+}
+
+/** WAV de démonstration : une voix synthétique très douce, de la durée de la dictée. */
+function demoWav(durationMs: number): ArrayBuffer {
+  const rate = 16_000;
+  const n = Math.round((Math.min(durationMs, 20_000) / 1000) * rate);
+  const buf = new ArrayBuffer(44 + n * 2);
+  const v = new DataView(buf);
+  const str = (o: number, s: string) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  str(0, "RIFF");
+  v.setUint32(4, 36 + n * 2, true);
+  str(8, "WAVEfmt ");
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true);
+  v.setUint32(28, rate * 2, true);
+  v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true);
+  str(36, "data");
+  v.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) {
+    const t = i / rate;
+    const env = Math.max(0, Math.sin(t * 5)) ** 2;
+    const f0 = 150 + 20 * Math.sin(t * 2);
+    const s = (Math.sin(2 * Math.PI * f0 * t) + 0.4 * Math.sin(4 * Math.PI * f0 * t)) * env * 0.12;
+    v.setInt16(44 + i * 2, Math.round(s * 32767), true);
+  }
+  return buf;
 }
 
 function freshData(): MockData {
+  const seed = seedHistory();
   return {
     settings: { ...DEFAULT_SETTINGS },
     downloaded: [],
-    history: seedHistory(),
+    history: seed.history,
+    corrections: seed.corrections,
+    dismissed: [],
     apiKey: "",
     permissions: { microphone: "undetermined", accessibility: "denied" },
   };
@@ -352,12 +526,12 @@ async function stopDictation() {
   const s = data.settings;
   const text = PHRASES[Math.floor(Math.random() * PHRASES.length)];
   const entry: HistoryEntry = {
-    id: `mock-${Date.now()}`,
-    text,
-    created_at: new Date().toISOString(),
-    duration_ms: duration,
-    latency_ms: latency,
-    engine: s.engine,
+    ...makeEntry(`mock-${Date.now()}`, text, Date.now(), {
+      duration_ms: duration,
+      latency_ms: latency,
+      engine: s.engine,
+      has_audio: s.history_enabled && s.keep_audio,
+    }),
     model: s.engine === "local" ? s.local_model : s.remote_model,
   };
   if (s.history_enabled) {
@@ -689,15 +863,60 @@ const impl: Impl = {
   stop_dictation: () => stopDictation(),
   cancel_dictation: () => cancelDictation(),
   toggle_dictation: () => (dictation ? stopDictation() : startDictation(true)),
-  get_history: () => structuredClone(data.history),
+  get_history: () => structuredClone(data.history.slice(0, 500)),
+  search_history: ({ query }) => searchHistory(query),
   delete_history_entry: ({ id }) => {
     data.history = data.history.filter((h) => h.id !== id);
+    data.corrections = data.corrections.filter((c) => c.entryId !== id);
     persist();
   },
   clear_history: () => {
     data.history = [];
+    data.corrections = [];
+    data.dismissed = [];
     persist();
   },
+  correct_history_entry: ({ id, text }): CorrectionResult => {
+    const h = data.history.find((e) => e.id === id);
+    if (!h) throw "Dictée introuvable.";
+    const t = text.trim();
+    if (!t) throw "Le texte ne peut pas être vide : supprimez plutôt la dictée.";
+    const changes = diffWords(h.text, t);
+    if (t !== h.text) data.corrections.push({ entryId: id, changes });
+    h.text = t;
+    h.corrected_text = t === h.final_text ? null : t;
+    h.corrected_at = h.corrected_text ? new Date().toISOString() : null;
+    persist();
+    return { entry: structuredClone(h), changes };
+  },
+  get_vocabulary_suggestions: () => suggestions(),
+  dismiss_vocabulary_suggestion: ({ term }) => {
+    data.dismissed.push(term);
+    persist();
+  },
+  get_audio_usage: () => audioUsage(),
+  delete_all_audio: () => {
+    for (const h of data.history) {
+      h.has_audio = false;
+      h.audio_bytes = 0;
+    }
+    persist();
+  },
+  get_dictation_audio: ({ id }) => {
+    const h = data.history.find((e) => e.id === id);
+    if (!h?.has_audio) throw "Aucun audio pour cette dictée.";
+    return demoWav(h.duration_ms);
+  },
+  export_history: async ({ query, format }) => {
+    await sleep(400);
+    const n = searchHistory({ ...query, limit: 1e9 }).entries.filter((e) => format !== "corpus" || e.has_audio).length;
+    if (!n) throw format === "corpus" ? "Aucune dictée avec audio à exporter." : "Aucune dictée à exporter.";
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
+    const base = detectPlatform() === "windows" ? "C:\\Users\\vous\\Documents\\Murmure" : "~/Documents/Murmure";
+    const sep = detectPlatform() === "windows" ? "\\" : "/";
+    return `${base}${sep}${format === "corpus" ? `corpus-${stamp}` : `historique-${stamp}.${format}`}`;
+  },
+  reveal_path: () => undefined,
   copy_text: ({ text }) => {
     // Sans attendre : l'API presse-papiers du navigateur peut rester en suspens sans focus.
     navigator.clipboard?.writeText(text).catch(() => undefined);
