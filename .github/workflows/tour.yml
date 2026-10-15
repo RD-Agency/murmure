@@ -1,0 +1,26 @@
+name: Tour (tests Linux)
+
+# Lance une commande sur la tour (runner self-hosted RTX) pour les tests lourds :
+# builds Linux natifs, matrice Docker multi-distro, tests GPU. Évite l'émulation amd64 sur Mac.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branche ou commit à tester
+        default: main
+      command:
+        description: Commande bash à exécuter à la racine du dépôt
+        default: uname -a && nproc && free -h && (docker --version || true) && nvidia-smi
+
+jobs:
+  run:
+    runs-on: [self-hosted, murmure-cuda]
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Commande
+        env:
+          CMD: ${{ inputs.command }}
+        run: bash -c "$CMD"
