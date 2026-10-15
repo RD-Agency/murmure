@@ -1,18 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Modules de l'agent audio/moteurs
 pub mod audio;
+pub mod audio_file;
+pub mod config_transfer;
 pub mod engine;
+pub mod file_transcription;
 pub mod models;
 pub mod settings;
 
 // Modules système
 pub mod history;
+pub mod ducking;
 pub mod hotkey;
 pub mod inject;
 pub mod install;
 pub mod overlay;
 pub mod permissions;
 pub mod pipeline;
+pub mod postprocess;
+pub mod silence;
 pub mod state;
 pub mod tray;
 pub mod punctuation;
@@ -73,7 +79,13 @@ fn get_settings(state: State<'_, AppState>) -> Settings {
 }
 
 #[tauri::command]
-async fn save_settings(app: AppHandle, state: State<'_, AppState>, mut settings: Settings) -> CmdResult<()> {
+async fn save_settings(app: AppHandle, state: State<'_, AppState>, settings: Settings) -> CmdResult<()> {
+    apply_settings(&app, &state, settings).await
+}
+
+/// Valide, enregistre et applique de nouveaux réglages (interface et import).
+async fn apply_settings(app: &AppHandle, state: &AppState, mut settings: Settings) -> CmdResult<()> {
+    let app = app.clone();
     let old = state.settings();
     // Champ géré par Rust (portail Wayland) : la copie du front peut être périmée.
     settings.wayland_restore_token = old.wayland_restore_token.clone();
@@ -123,6 +135,64 @@ async fn save_settings(app: AppHandle, state: State<'_, AppState>, mut settings:
         log::warn!("émission settings-changed : {e}");
     }
     Ok(())
+}
+
+/// Exporte les réglages : boîte d'enregistrement, puis écriture. `None` si l'utilisateur annule.
+#[tauri::command]
+async fn export_config(app: AppHandle, state: State<'_, AppState>, include_secrets: bool) -> CmdResult<Option<String>> {
+    let settings = state.settings();
+    let api_key = if include_secrets { state.api_key() } else { None };
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri_plugin_dialog::DialogExt;
+        let Some(path) = app
+            .dialog()
+            .file()
+            .set_title("Exporter les réglages")
+            .set_file_name(config_transfer::DEFAULT_FILE_NAME)
+            .add_filter("Réglages Murmure", &["json"])
+            .blocking_save_file()
+            .and_then(|p| p.into_path().ok())
+        else {
+            return Ok(None);
+        };
+        let file = config_transfer::export(&settings, api_key.as_deref());
+        config_transfer::write(&path, &file)?;
+        log::info!("réglages exportés dans {}", path.display());
+        Ok(Some(path.to_string_lossy().into_owned()))
+    })
+    .await
+    .map_err(err_str)?
+}
+
+/// Importe un fichier de réglages et l'applique. `None` si l'utilisateur annule.
+#[tauri::command]
+async fn import_config(app: AppHandle, state: State<'_, AppState>) -> CmdResult<Option<Settings>> {
+    let app2 = app.clone();
+    let current = state.settings();
+    let imported = tauri::async_runtime::spawn_blocking(move || {
+        use tauri_plugin_dialog::DialogExt;
+        let Some(path) = app2
+            .dialog()
+            .file()
+            .set_title("Importer des réglages")
+            .add_filter("Réglages Murmure", &["json"])
+            .blocking_pick_file()
+            .and_then(|p| p.into_path().ok())
+        else {
+            return Ok(None);
+        };
+        config_transfer::read(&path).and_then(|f| config_transfer::merge(&current, &f)).map(Some)
+    })
+    .await
+    .map_err(err_str)??;
+    let Some(imported) = imported else { return Ok(None) };
+    if let Some(key) = imported.api_key {
+        let res = tauri::async_runtime::spawn_blocking(move || settings::set_api_key(&key)).await.map_err(err_str)?;
+        state.invalidate_api_key();
+        res.map_err(|e| format!("Réglages non importés : clé API impossible à enregistrer dans le trousseau ({e})"))?;
+    }
+    apply_settings(&app, &state, imported.settings).await?;
+    Ok(Some(state.settings()))
 }
 
 fn apply_autostart(app: &AppHandle, enabled: bool) -> Result<(), String> {
@@ -412,12 +482,15 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     log::info!("config : {} — données : {}", config_dir.display(), data_dir.display());
 
     let relaunched_hidden = updater::take_relaunch_hidden(&config_dir);
+    // Volume resté baissé si Murmure s'est arrêté brutalement pendant une dictée.
+    ducking::recover(&config_dir);
     let settings = settings::load(&config_dir);
     let (tx, rx) = std::sync::mpsc::channel::<Command>();
     app.manage(AppState::new(config_dir, data_dir, settings.clone(), tx));
     app.manage(hotkey::Registered::default());
     app.manage(updater::UpdaterState::default());
     app.manage(wayland::WaylandShared::default());
+    app.manage(file_transcription::FileJob::default());
     #[cfg(target_os = "linux")]
     app.manage(portal::Portals::default());
     pipeline::spawn_worker(handle.clone(), rx);
@@ -465,6 +538,10 @@ pub fn run() {
     if let Some(code) = install::cli(&args) {
         std::process::exit(code);
     }
+    // `murmure --export-config fichier.json` / `--import-config fichier.json` : même principe.
+    if let Some(code) = config_transfer::cli(&args) {
+        std::process::exit(code);
+    }
 
     let app = tauri::Builder::default()
         // single-instance doit être le premier plugin enregistré.
@@ -487,6 +564,7 @@ pub fn run() {
         )
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(setup)
         .on_window_event(|window, event| {
             if window.label() == MAIN_WINDOW
@@ -528,6 +606,11 @@ pub fn run() {
             wayland_authorize,
             wayland_configure_shortcut,
             wayland_refresh,
+            export_config,
+            import_config,
+            file_transcription::pick_audio_file,
+            file_transcription::transcribe_file,
+            file_transcription::cancel_file_transcription,
         ])
         .build(tauri::generate_context!());
 

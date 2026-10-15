@@ -27,7 +27,7 @@ pub const INSTALL_ARG: &str = "--install-model";
 /// du dossier standard. Pratique pour les tests, la CI et les déploiements en parc.
 pub const DATA_DIR_ENV: &str = "MURMURE_DATA_DIR";
 /// Identifiant de l'app (doit rester égal à `identifier` dans `tauri.conf.json`).
-const IDENTIFIER: &str = "fr.rdagency.murmure";
+pub(crate) const IDENTIFIER: &str = "fr.rdagency.murmure";
 
 /// Message affiché quand une dictée déclenche l'installation.
 pub const INSTALL_STARTED_MSG: &str = "Installation du modèle…";

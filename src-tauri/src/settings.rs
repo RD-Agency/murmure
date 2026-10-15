@@ -47,13 +47,22 @@ pub struct Settings {
     pub initial_prompt: String,
     /// « virgule », « point à la ligne »… convertis en signes (français).
     pub spoken_punctuation: bool,
+    /// Textes de trois mots ou moins : ni point final ni majuscule imposée par Whisper.
+    pub short_text_plain: bool,
     pub remote_endpoint: String,
     pub remote_model: String,
     pub hotkey: String,
     pub hotkey_mode: HotkeyMode,
+    /// Bascule ou mains libres : silence (en ms) après lequel la dictée se termine ; 0 = jamais.
+    pub auto_stop_silence_ms: u32,
     pub input_device: Option<String>,
+    /// Baisse le volume de sortie du système pendant l'enregistrement.
+    pub duck_volume: bool,
     pub paste_mode: PasteMode,
     pub restore_clipboard: bool,
+    /// Mot de validation : prononcé en fin de dictée, il est retiré et Entrée suit le collage.
+    pub submit_word_enabled: bool,
+    pub submit_words: Vec<String>,
     pub sounds: bool,
     pub launch_at_login: bool,
     pub history_enabled: bool,
@@ -61,6 +70,14 @@ pub struct Settings {
     /// Linux Wayland : jeton de restauration du portail RemoteDesktop (collage), géré par Rust
     /// uniquement — la valeur envoyée par le front est ignorée par `save_settings`.
     pub wayland_restore_token: Option<String>,
+}
+
+/// Arrêt automatique après deux secondes de silence (bascule et mains libres).
+pub const DEFAULT_AUTO_STOP_MS: u32 = 2000;
+
+/// Mots de validation proposés par défaut.
+pub fn default_submit_words() -> Vec<String> {
+    vec!["terminé".into(), "envoyer".into()]
 }
 
 /// Raccourci par défaut : Option+Espace sur macOS, Ctrl+Alt+Espace ailleurs
@@ -81,13 +98,18 @@ impl Default for Settings {
             language: "fr".into(),
             initial_prompt: String::new(),
             spoken_punctuation: true,
+            short_text_plain: true,
             remote_endpoint: String::new(),
             remote_model: "whisper-large-v3-turbo".into(),
             hotkey: default_hotkey().into(),
             hotkey_mode: HotkeyMode::Hybrid,
+            auto_stop_silence_ms: DEFAULT_AUTO_STOP_MS,
             input_device: None,
+            duck_volume: false,
             paste_mode: PasteMode::Paste,
             restore_clipboard: true,
+            submit_word_enabled: false,
+            submit_words: default_submit_words(),
             sounds: true,
             launch_at_login: false,
             history_enabled: true,
@@ -201,6 +223,10 @@ mod tests {
         assert!(s.input_device.is_none());
         assert!(s.wayland_restore_token.is_none());
         assert!(s.initial_prompt.is_empty() && s.remote_endpoint.is_empty());
+        assert!(s.short_text_plain);
+        assert_eq!(s.auto_stop_silence_ms, 2000);
+        assert!(!s.submit_word_enabled && !s.duck_volume);
+        assert_eq!(s.submit_words, ["terminé", "envoyer"]);
         if cfg!(target_os = "macos") {
             assert_eq!(s.hotkey, "Alt+Space");
         } else {
@@ -244,6 +270,9 @@ mod tests {
         let s = load(&dir);
         assert_eq!(s.language, "en");
         assert!(s.sounds);
+        // Fichier d'une version précédente : les nouveaux réglages prennent leur valeur par défaut.
+        assert!(s.short_text_plain && !s.submit_word_enabled);
+        assert_eq!(s.auto_stop_silence_ms, DEFAULT_AUTO_STOP_MS);
         fs::remove_dir_all(dir).ok();
     }
 }

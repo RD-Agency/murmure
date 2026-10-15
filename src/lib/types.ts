@@ -15,15 +15,24 @@ export interface Settings {
   initial_prompt: string;
   /** « virgule », « point à la ligne »… convertis en signes (français) */
   spoken_punctuation: boolean;
+  /** Trois mots ou moins : ni point final ni majuscule imposée */
+  short_text_plain: boolean;
   remote_endpoint: string;
   remote_model: string;
   /** Format accelerator Tauri, ex. "Alt+Space" */
   hotkey: string;
   hotkey_mode: HotkeyMode;
+  /** Bascule ou mains libres : fin de la dictée après ce silence, en ms ; 0 = jamais */
+  auto_stop_silence_ms: number;
   /** null = micro par défaut */
   input_device: string | null;
+  /** Baisse le volume de sortie pendant l'enregistrement */
+  duck_volume: boolean;
   paste_mode: PasteMode;
   restore_clipboard: boolean;
+  /** Mot de validation : retiré en fin de dictée, puis Entrée après le collage */
+  submit_word_enabled: boolean;
+  submit_words: string[];
   sounds: boolean;
   launch_at_login: boolean;
   history_enabled: boolean;
@@ -118,6 +127,23 @@ export interface WaylandStatus {
   paste_fallback: "ydotool" | "wtype" | null;
 }
 
+/** Progression de la transcription d'un fichier (événement `file-transcription-progress`). */
+export interface FileProgress {
+  stage: "decoding" | "transcribing";
+  /** Avancement global de 0 à 1 */
+  fraction: number;
+  done: number;
+  total: number;
+}
+
+/** Résultat de `transcribe_file`. */
+export interface FileTranscript {
+  text: string;
+  file_name: string;
+  duration_ms: number;
+  latency_ms: number;
+}
+
 /** Événements Rust → front et leur payload. */
 export interface EventMap {
   "dictation-state": DictationStatePayload;
@@ -131,6 +157,7 @@ export interface EventMap {
   "update-ready": UpdateInfo;
   "update-progress": UpdateProgress;
   "wayland-status": WaylandStatus;
+  "file-transcription-progress": FileProgress;
 }
 
 export type EventName = keyof EventMap;
@@ -167,6 +194,13 @@ export interface CommandMap {
   wayland_authorize: { args: undefined; ret: WaylandStatus };
   wayland_configure_shortcut: { args: undefined; ret: void };
   wayland_refresh: { args: undefined; ret: WaylandStatus };
+  /** Chemin écrit, ou null si l'utilisateur a annulé */
+  export_config: { args: { includeSecrets: boolean }; ret: string | null };
+  /** Réglages appliqués, ou null si l'utilisateur a annulé */
+  import_config: { args: undefined; ret: Settings | null };
+  pick_audio_file: { args: undefined; ret: string | null };
+  transcribe_file: { args: { path: string }; ret: FileTranscript };
+  cancel_file_transcription: { args: undefined; ret: void };
 }
 
 export type CommandName = keyof CommandMap;

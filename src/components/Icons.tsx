@@ -273,3 +273,19 @@ export const IconEyeOff = (p: IconProps) => (
     <path d="m3.5 3.5 17 17" />
   </Svg>
 );
+
+export const IconFileAudio = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M14 3.5H7a1.5 1.5 0 0 0-1.5 1.5v14A1.5 1.5 0 0 0 7 20.5h10a1.5 1.5 0 0 0 1.5-1.5V8L14 3.5Z" />
+    <path d="M14 3.5V8h4.5" />
+    <path d="M9.5 16.5v-3M12 17.5v-5M14.5 15.5v-1" />
+  </Svg>
+);
+
+export const IconUpload = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 15.5V4" />
+    <path d="m7.5 8.5 4.5-4.5 4.5 4.5" />
+    <path d="M4.5 15v3.5a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5V15" />
+  </Svg>
+);
