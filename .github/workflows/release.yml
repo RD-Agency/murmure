@@ -9,24 +9,21 @@ name: Release
 # Lien public : https://crgenerator.s3.eu-west-par.io.cloud.ovh.net/murmure/index.html
 #
 # macOS : signé Developer ID et notarisé si les secrets APPLE_* existent, sinon signature ad hoc.
+#
+# Déclenché uniquement par un tag poussé sur le dépôt d'origine (droits d'écriture requis).
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Version à publier (ex. v0.1.0)"
-        required: true
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  group: release-${{ github.ref_name }}
   cancel-in-progress: false
 
 env:
-  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  TAG: ${{ github.ref_name }}
   # Défini → ggml désactive -march=native : binaire portable (base AVX2/FMA/F16C en x86).
   SOURCE_DATE_EPOCH: "1700000000"
   S3_ENDPOINT: https://s3.eu-west-par.io.cloud.ovh.net
@@ -41,6 +38,8 @@ env:
 jobs:
   draft:
     name: Release brouillon
+    # Un fork qui pousse un tag ne lance rien : tous les jobs dépendent de celui-ci.
+    if: github.repository == 'RD-Agency/murmure'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -281,7 +280,7 @@ jobs:
   publish:
     needs: build
     # Publie même si une variante a échoué : les autres plateformes restent disponibles.
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && github.repository == 'RD-Agency/murmure' }}
     name: Page de téléchargement et mise à jour auto
     runs-on: ubuntu-latest
     env:

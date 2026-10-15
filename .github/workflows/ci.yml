@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+# Dépôt public : ce workflow s'exécute aussi pour les PR de forks. Il ne tourne que sur des
+# runners hébergés par GitHub, avec un jeton en lecture seule et sans aucun secret.
+# Le runner auto-hébergé (la tour) ne doit jamais être utilisé ici.
+permissions:
+  contents: read
+
 jobs:
   app:
     name: App (${{ matrix.os }})

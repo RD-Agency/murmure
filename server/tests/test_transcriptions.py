@@ -59,9 +59,9 @@ def test_vtt(client, auth, wav):
 
 
 def test_parametres_transmis_au_moteur(client, auth, wav, engine):
-    _post(client, auth, wav, language="fr-FR", prompt="Maître Dupont, LiSiLex", temperature="0.4")
+    _post(client, auth, wav, language="fr-FR", prompt="Maître Dupont, Cabinet Martin", temperature="0.4")
     call = engine.calls[-1]
-    assert call == {"size": len(wav), "language": "fr", "prompt": "Maître Dupont, LiSiLex", "temperature": 0.4}
+    assert call == {"size": len(wav), "language": "fr", "prompt": "Maître Dupont, Cabinet Martin", "temperature": 0.4}
 
 
 @pytest.mark.parametrize("lang", ["", "auto", "AUTO"])
