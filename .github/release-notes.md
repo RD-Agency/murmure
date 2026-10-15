@@ -1,11 +1,9 @@
-## Nouveautés de la 0.1.5
+## Nouveautés de la 0.1.6
 
-- **Wayland natif sous Linux** (KDE Plasma 5.27 et plus, GNOME 48 et plus) : le raccourci global et le
-  collage passent par les portails XDG du bureau. Au premier lancement, cliquez sur « Autoriser Murmure » ;
-  le bureau demande une seule fois d'accepter le raccourci, puis le contrôle du clavier. Sans portail,
-  Murmure se replie sur `ydotool`, ou copie le texte et vous invite à le coller.
-- **Murmure passe en open source**, sous licence GNU AGPL v3 ou ultérieure. Le code est sur
-  https://github.com/RD-Agency/murmure.
+- **Transcription sur processeur environ dix fois plus rapide** sur les PC sans carte graphique : une
+  dictée courte passe d'environ 2 minutes 30 à une quinzaine de secondes. Un processeur de 2013 ou plus
+  récent est requis pour le moteur local.
+- **Page de téléchargement refaite**, plus claire, avec la bonne commande pour chaque distribution Linux.
 
 Le détail des versions est dans le [CHANGELOG](https://github.com/RD-Agency/murmure/blob/main/CHANGELOG.md).
 

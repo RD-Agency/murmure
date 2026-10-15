@@ -1,5 +1,14 @@
 # Historique des versions
 
+## 0.1.6 — 15 octobre 2026
+
+- Transcription sur processeur environ dix fois plus rapide : les versions pour PC (Linux, Windows, Mac
+  Intel) utilisent désormais les instructions AVX2, FMA et F16C. Un processeur de 2013 ou plus récent est
+  requis pour le moteur local ; sur un processeur plus ancien, Murmure l'indique et propose le moteur
+  « Serveur ».
+- Nombre de threads adapté aux processeurs à nombreux cœurs (`MURMURE_THREADS` pour le forcer).
+- Page de téléchargement refaite : plus claire, avec le paquet son adapté à chaque distribution Linux.
+
 ## 0.1.5 — 15 octobre 2026
 
 - Linux : prise en charge native de Wayland par les portails XDG (KDE Plasma 5.27 et plus, GNOME 48 et
