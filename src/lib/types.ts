@@ -36,6 +36,14 @@ export interface Settings {
   sounds: boolean;
   launch_at_login: boolean;
   history_enabled: boolean;
+  /** Conserve l'audio des dictées (Opus, environ 9 Mo par heure). */
+  keep_audio: boolean;
+  /** Plafond de l'audio conservé en Mo (5 Go au plus) ; au-delà, les plus anciens sont supprimés. */
+  audio_cap_mb: number;
+  /** Corrige d'après le vocabulaire les mots que Whisper a mal reconnus. */
+  auto_correct: boolean;
+  /** Règles de remplacement appliquées au texte final. */
+  replacements: Replacement[];
   onboarding_done: boolean;
   /** Linux Wayland : jeton du portail RemoteDesktop, géré par Rust (ignoré à l'enregistrement). */
   wayland_restore_token: string | null;
@@ -56,8 +64,20 @@ export interface ModelInfo {
   path: string | null;
 }
 
+export interface Replacement {
+  from: string;
+  to: string;
+}
+
+export interface AutoCorrection {
+  from: string;
+  to: string;
+  probability: number;
+}
+
 export interface HistoryEntry {
   id: string;
+  /** Texte courant : la correction manuelle si elle existe, sinon le texte collé. */
   text: string;
   /** RFC3339 */
   created_at: string;
@@ -65,7 +85,57 @@ export interface HistoryEntry {
   latency_ms: number;
   engine: EngineKind;
   model: string;
+  /** Code ISO 639-1 ou "auto" */
+  language: string;
+  /** Sortie du modèle, avant corrections et ponctuation. */
+  raw_text: string;
+  /** Texte collé. */
+  final_text: string;
+  corrected_text: string | null;
+  corrected_at: string | null;
+  auto_corrections: AutoCorrection[];
+  has_audio: boolean;
+  audio_bytes: number;
 }
+
+/** Recherche dans l'historique : texte plein (préfixes) et dates locales AAAA-MM-JJ incluses. */
+export interface HistoryQuery {
+  text: string;
+  from: string | null;
+  to: string | null;
+  limit?: number;
+  offset?: number;
+}
+
+export interface HistoryPage {
+  entries: HistoryEntry[];
+  total: number;
+}
+
+export interface TermChange {
+  wrong: string;
+  right: string;
+}
+
+export interface CorrectionResult {
+  entry: HistoryEntry;
+  changes: TermChange[];
+}
+
+export interface VocabularySuggestion {
+  term: string;
+  count: number;
+  variants: string[];
+}
+
+export interface AudioUsage {
+  bytes: number;
+  files: number;
+  cap_bytes: number;
+  duration_ms: number;
+}
+
+export type ExportFormat = "csv" | "json" | "corpus";
 
 export interface Permissions {
   microphone: "granted" | "denied" | "undetermined" | "unknown";
@@ -180,8 +250,18 @@ export interface CommandMap {
   cancel_dictation: { args: undefined; ret: void };
   toggle_dictation: { args: undefined; ret: void };
   get_history: { args: undefined; ret: HistoryEntry[] };
+  search_history: { args: { query: HistoryQuery }; ret: HistoryPage };
   delete_history_entry: { args: { id: string }; ret: void };
   clear_history: { args: undefined; ret: void };
+  correct_history_entry: { args: { id: string; text: string }; ret: CorrectionResult };
+  get_vocabulary_suggestions: { args: undefined; ret: VocabularySuggestion[] };
+  dismiss_vocabulary_suggestion: { args: { term: string }; ret: void };
+  get_audio_usage: { args: undefined; ret: AudioUsage };
+  delete_all_audio: { args: undefined; ret: void };
+  /** WAV en binaire */
+  get_dictation_audio: { args: { id: string }; ret: ArrayBuffer };
+  export_history: { args: { query: HistoryQuery; format: ExportFormat }; ret: string };
+  reveal_path: { args: { path: string }; ret: void };
   copy_text: { args: { text: string }; ret: void };
   check_permissions: { args: undefined; ret: Permissions };
   request_microphone: { args: undefined; ret: Permissions };

@@ -98,7 +98,8 @@ Le raccourci par défaut est Option+Espace sur Mac et Ctrl+Alt+Espace sous Windo
 
 Une pastille discrète indique l'enregistrement et la transcription. La fenêtre principale sert surtout aux
 réglages : raccourci, langue, micro, vocabulaire (noms propres, termes techniques), mode de collage et
-moteur. L'historique des dictées reste sur la machine et peut être désactivé.
+moteur. L'historique des dictées reste sur la machine et peut être désactivé : on y cherche, réécoute et
+corrige ses dictées, et les termes souvent corrigés sont proposés pour le vocabulaire.
 
 ## Confidentialité
 
@@ -113,8 +114,10 @@ Murmure se connecte à Internet dans trois cas seulement :
 - le moteur « Serveur », si vous le choisissez : l'audio de chaque dictée est alors envoyé au serveur
   configuré. Avec un service tiers comme OpenAI ou Groq, l'audio quitte votre infrastructure.
 
-Les réglages et l'historique sont des fichiers JSON locaux. La clé API du moteur « Serveur » est rangée
-dans le trousseau du système, jamais dans un fichier.
+Les réglages sont un fichier JSON local, l'historique une base SQLite locale. L'audio des dictées y est
+conservé par défaut, compressé (environ 9 Mo par heure, 5 Go au plus) : Réglages › Historique permet de le
+désactiver ou de le supprimer. La clé API du moteur « Serveur » est rangée dans le trousseau du système,
+jamais dans un fichier.
 
 ## Compiler depuis les sources
 

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Moteur local : whisper.cpp via `whisper-rs`, contexte chargé une seule fois.
 
-use super::{clean_transcript, TranscribeOptions};
+use super::{clean_transcript, TranscribeOptions, Transcript};
+use crate::correction::WordConfidence;
 use anyhow::{anyhow, Context};
 use std::path::{Path, PathBuf};
 use std::sync::Once;
@@ -208,6 +209,11 @@ impl LocalEngine {
 
     /// Transcrit un signal mono 16 kHz f32. Un état whisper neuf est créé à chaque appel.
     pub fn transcribe(&self, samples: &[f32], opts: &TranscribeOptions) -> anyhow::Result<String> {
+        self.transcribe_detailed(samples, opts).map(|t| t.text)
+    }
+
+    /// Comme [`Self::transcribe`], avec la confiance de chaque mot (corrections automatiques).
+    pub fn transcribe_detailed(&self, samples: &[f32], opts: &TranscribeOptions) -> anyhow::Result<Transcript> {
         self.transcribe_with(samples, opts, default_strategy(self.gpu))
     }
 
@@ -216,9 +222,9 @@ impl LocalEngine {
         samples: &[f32],
         opts: &TranscribeOptions,
         strategy: SamplingStrategy,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<Transcript> {
         if samples.is_empty() {
-            return Ok(String::new());
+            return Ok(Transcript::default());
         }
         let padded;
         let audio: &[f32] = if samples.len() < MIN_SAMPLES {
@@ -258,6 +264,8 @@ impl LocalEngine {
             .map_err(|e| anyhow!("Transcription locale en échec : {e}"))?;
 
         let mut text = String::new();
+        let mut words = Vec::new();
+        let eot = self.ctx.token_eot();
         for segment in state.as_iter() {
             if segment.no_speech_probability() > NO_SPEECH_DROP {
                 continue;
@@ -269,9 +277,39 @@ impl LocalEngine {
                 }
                 Err(e) => log::warn!("Segment illisible : {e}"),
             }
+            collect_words(&segment, eot, &mut words);
         }
-        Ok(clean_transcript(&text))
+        Ok(Transcript { text: clean_transcript(&text), words })
     }
+}
+
+/// Regroupe les tokens d'un segment en mots (un token qui commence par une espace ouvre un mot) ;
+/// la confiance d'un mot est la plus faible probabilité de ses tokens. Les tokens spéciaux
+/// (début, fin, langue, horodatages : identifiants ≥ EOT) sont ignorés.
+fn collect_words(segment: &whisper_rs::WhisperSegment<'_>, eot: i32, words: &mut Vec<WordConfidence>) {
+    let mut bytes: Vec<u8> = Vec::new();
+    let mut prob = f32::INFINITY;
+    let mut flush = |bytes: &mut Vec<u8>, prob: &mut f32| {
+        let word = String::from_utf8_lossy(bytes).trim().to_string();
+        if !word.is_empty() {
+            words.push(WordConfidence { word, probability: prob.min(1.0) });
+        }
+        bytes.clear();
+        *prob = f32::INFINITY;
+    };
+    for i in 0..segment.n_tokens() {
+        let Some(token) = segment.get_token(i) else { continue };
+        if token.token_id() >= eot {
+            continue;
+        }
+        let Ok(piece) = token.to_bytes() else { continue };
+        if piece.first() == Some(&b' ') {
+            flush(&mut bytes, &mut prob);
+        }
+        bytes.extend_from_slice(piece);
+        prob = prob.min(token.token_probability());
+    }
+    flush(&mut bytes, &mut prob);
 }
 
 #[cfg(test)]
@@ -372,14 +410,16 @@ mod tests {
             let t = Instant::now();
             let text = engine
                 .transcribe_with(&samples, &opts, SamplingStrategy::Greedy { best_of: 1 })
-                .unwrap();
+                .unwrap()
+                .text;
             println!("greedy : {} ms → {text}", t.elapsed().as_millis());
         }
         for _ in 0..2 {
             let t = Instant::now();
             let text = engine
                 .transcribe_with(&samples, &opts, SamplingStrategy::BeamSearch { beam_size: 5, patience: -1.0 })
-                .unwrap();
+                .unwrap()
+                .text;
             println!("beam 5 : {} ms → {text}", t.elapsed().as_millis());
         }
         let t = Instant::now();

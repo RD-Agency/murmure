@@ -4,6 +4,7 @@
 //! - `settings.json` dans le dossier de config de l'app (écriture atomique tmp + rename) ;
 //! - la clé API du moteur serveur vit dans le trousseau système, jamais dans le JSON.
 
+use crate::correction::Replacement;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -66,6 +67,14 @@ pub struct Settings {
     pub sounds: bool,
     pub launch_at_login: bool,
     pub history_enabled: bool,
+    /// Conserve l'audio de chaque dictée (Opus, environ 9 Mo par heure) dans l'historique.
+    pub keep_audio: bool,
+    /// Plafond de l'audio conservé, en Mo (5 Go au plus) : au-delà, les plus anciens sont supprimés.
+    pub audio_cap_mb: u64,
+    /// Corrige d'après le vocabulaire les mots que Whisper a mal reconnus (confiance faible).
+    pub auto_correct: bool,
+    /// Règles de remplacement appliquées au texte final.
+    pub replacements: Vec<Replacement>,
     pub onboarding_done: bool,
     /// Linux Wayland : jeton de restauration du portail RemoteDesktop (collage), géré par Rust
     /// uniquement — la valeur envoyée par le front est ignorée par `save_settings`.
@@ -113,9 +122,20 @@ impl Default for Settings {
             sounds: true,
             launch_at_login: false,
             history_enabled: true,
+            keep_audio: true,
+            audio_cap_mb: crate::history::DEFAULT_AUDIO_CAP_MB,
+            auto_correct: true,
+            replacements: Vec::new(),
             onboarding_done: false,
             wayland_restore_token: None,
         }
+    }
+}
+
+impl Settings {
+    /// Plafond effectif de l'audio en octets (entre 100 Mo et 5 Go).
+    pub fn audio_cap_bytes(&self) -> u64 {
+        self.audio_cap_mb.clamp(100, crate::history::DEFAULT_AUDIO_CAP_MB) * 1024 * 1024
     }
 }
 
@@ -219,6 +239,10 @@ mod tests {
         assert_eq!(s.hotkey_mode, HotkeyMode::Hybrid);
         assert_eq!(s.paste_mode, PasteMode::Paste);
         assert!(s.restore_clipboard && s.sounds && s.history_enabled);
+        assert!(s.keep_audio && s.auto_correct && s.replacements.is_empty());
+        assert_eq!(s.audio_cap_bytes(), 5 * 1024 * 1024 * 1024);
+        assert_eq!(Settings { audio_cap_mb: 1 << 40, ..Settings::default() }.audio_cap_bytes(), 5 << 30);
+        assert_eq!(Settings { audio_cap_mb: 0, ..Settings::default() }.audio_cap_bytes(), 100 << 20);
         assert!(!s.launch_at_login && !s.onboarding_done);
         assert!(s.input_device.is_none());
         assert!(s.wayland_restore_token.is_none());

@@ -2,12 +2,14 @@
 import { useEffect, useState } from "react";
 import { Button } from "../components/Button";
 import { Group, Row, Section } from "../components/Card";
+import { CorrectionSettings, HistorySettings } from "../components/HistorySettings";
 import { HotkeyRecorder } from "../components/HotkeyRecorder";
 import {
   IconBook,
   IconClipboard,
   IconCpu,
   IconGlobe,
+  IconHistory,
   IconKeyboard,
   IconLaptop,
   IconMic,
@@ -172,6 +174,7 @@ export function Settings() {
                   onChange={(e) => update({ initial_prompt: e.target.value }, 600)}
                 />
               </div>
+              <CorrectionSettings />
             </Group>
           </Section>
 
@@ -376,17 +379,14 @@ export function Settings() {
                   onChange={(launch_at_login) => update({ launch_at_login })}
                 />
               </Row>
-              <Row label="Historique" htmlFor="history" description="Conserve les dictées sur cet appareil pour les retrouver.">
-                <Switch
-                  id="history"
-                  label="Historique"
-                  checked={settings.history_enabled}
-                  onChange={(history_enabled) => update({ history_enabled })}
-                />
-              </Row>
               <UpdateRow />
               <ConfigTransferRow />
             </Group>
+          </Section>
+
+          {/* Historique */}
+          <Section id="historique" title="Historique" icon={<IconHistory size={15} />}>
+            <HistorySettings />
           </Section>
 
         </div>

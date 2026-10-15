@@ -21,6 +21,19 @@
 - Export et import des réglages en `.json` versionné, depuis Réglages › Général ou en ligne de commande
   (`murmure --export-config fichier.json`, `murmure --import-config fichier.json`). La clé API n'est
   exportée qu'à la demande (`--with-secrets`).
+- Historique dans une base locale (SQLite) : recherche plein texte sans accents ni casse, filtre par dates,
+  pagination. L'historique existant est importé automatiquement, sans perte ; il n'est plus limité à 500
+  dictées.
+- Audio des dictées conservé en Opus (environ 9 Mo par heure), à réécouter depuis l'historique. Plafond de
+  5 Go réglable plus bas : au-delà, l'audio le plus ancien est supprimé, le texte reste. Bouton
+  « Supprimer les audios » dans Réglages › Historique.
+- Correction des dictées dans l'historique. Les termes corrigés plusieurs fois sont proposés pour le
+  vocabulaire (ajout en un clic, jamais automatique) ; une correction peut devenir une règle de
+  remplacement.
+- Corrections automatiques limitées aux mots douteux : quand Whisper hésite sur un mot proche d'un terme
+  du vocabulaire, Murmure écrit ce terme. Les mots bien reconnus ne sont jamais modifiés.
+- Règles de remplacement dans Réglages › Langue et vocabulaire.
+- Export de l'historique en CSV ou JSON, et export du corpus (audio et texte corrigé) vers un dossier.
 
 ## 0.1.6 — 15 octobre 2026
 

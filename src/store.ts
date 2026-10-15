@@ -9,6 +9,7 @@ import type {
   HistoryEntry,
   ModelInfo,
   Platform,
+  Replacement,
   Settings,
   UpdateInfo,
   UpdateProgress,
@@ -69,6 +70,12 @@ interface AppState {
   deleteModel: (id: string) => Promise<void>;
   deleteHistoryEntry: (id: string) => Promise<void>;
   clearHistory: () => Promise<void>;
+  /** Remplace une entrée modifiée (correction) dans la liste des dictées récentes. */
+  upsertHistoryEntry: (entry: HistoryEntry) => void;
+  /** Ajoute un terme au vocabulaire (prompt initial), sans doublon. */
+  addVocabularyTerm: (term: string) => void;
+  /** Ajoute une règle de remplacement (remplace une règle de même source). */
+  addReplacement: (rule: Replacement) => void;
   checkUpdate: () => Promise<void>;
   installUpdate: () => Promise<void>;
   /** Choisit un fichier audio puis le transcrit. */
@@ -289,6 +296,24 @@ export const useApp = create<AppState>((set, get) => ({
     await api.clearHistory().catch(() => get().refreshHistory());
   },
 
+  upsertHistoryEntry: (entry) =>
+    set((st) => ({ history: st.history.map((h) => (h.id === entry.id ? entry : h)) })),
+
+  addVocabularyTerm: (term) => {
+    const s = get().settings;
+    if (!s) return;
+    get().updateSettings({ initial_prompt: appendVocabulary(s.initial_prompt, term) });
+  },
+
+  addReplacement: (rule) => {
+    const s = get().settings;
+    const from = rule.from.trim();
+    const to = rule.to.trim();
+    if (!s || !from || !to) return;
+    const others = s.replacements.filter((r) => r.from.trim().toLowerCase() !== from.toLowerCase());
+    get().updateSettings({ replacements: [...others, { from, to }] });
+  },
+
   checkUpdate: async () => {
     if (get().update.status === "installing" || get().update.status === "ready") return;
     set((st) => ({ update: { ...st.update, status: "checking", error: null } }));
@@ -361,3 +386,13 @@ export const useApp = create<AppState>((set, get) => ({
     }
   },
 }));
+
+/** Ajoute un terme au vocabulaire, séparé par une virgule (même règle que `correction::append_vocabulary`). */
+export function appendVocabulary(vocabulary: string, term: string): string {
+  const t = term.trim();
+  const norm = (x: string) => x.trim().replace(/\.$/, "").toLowerCase();
+  if (!t || vocabulary.split(/[,;\n]/).some((v) => norm(v) === norm(t))) return vocabulary;
+  const v = vocabulary.trimEnd();
+  if (!v) return t;
+  return /[,;]$/.test(v) ? `${v} ${t}` : `${v}, ${t}`;
+}

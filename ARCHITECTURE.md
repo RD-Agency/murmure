@@ -57,7 +57,9 @@ src-tauri/src/
   overlay.rs              position et affichage de la pastille
   tray.rs                 icône et menu de la barre de menus
   permissions.rs          micro et Accessibilité (macOS)
-  history.rs              historique local (history.json)
+  history/mod.rs          historique local : base SQLite (history.sqlite3), recherche, corrections, export
+  history/audio.rs        audio des dictées : Ogg Opus (libopus liée statiquement)
+  correction.rs           corrections : mots douteux, règles de remplacement, diff des corrections
   settings.rs             réglages (settings.json) et clé API dans le trousseau
   audio.rs                capture du micro (cpal), conversion en mono 16 kHz, niveau sonore
   models.rs               catalogue des modèles, téléchargement vérifié
@@ -80,9 +82,12 @@ raccourci pressé   ─► état recording, pastille visible, son de départ, Re
 raccourci relâché  ─► mode hybride : appui de moins de 300 ms → mains libres, on attend un second appui
                    ─► Recorder::stop ─► état transcribing
                    ─► LocalEngine::transcribe (thread bloquant) ou RemoteEngine::transcribe (async)
-                   ─► postprocess::finalize : espaces, mot de validation, ponctuation dictée, textes courts
-                   ─► inject::deliver (collage, puis Entrée si mot de validation) ─► historique
-                   ─► événement dictation-result, état idle, pastille masquée
+                   ─► correction::finalize : mots douteux corrigés d'après le vocabulaire (moteur local),
+                      puis postprocess::finalize (espaces, mot de validation, ponctuation dictée, textes
+                      courts), puis règles de remplacement
+                   ─► inject::deliver (collage, puis Entrée si mot de validation) ─► état idle
+                   ─► history::record en tâche de fond : encodage Opus, base SQLite, plafond audio
+                   ─► événement dictation-result
 Échap pendant l'enregistrement ─► cancel_dictation (X11, macOS, Windows)
 silence prolongé en bascule ou mains libres ─► Stop, comme un second appui
 enregistrement de moins de 250 ms, ou silence ─► abandon sans message
@@ -146,6 +151,10 @@ réglages par défaut.
   "sounds": true,
   "launch_at_login": false,
   "history_enabled": true,
+  "keep_audio": true,                      // audio des dictées dans l'historique (Opus, ~9 Mo/h)
+  "audio_cap_mb": 5120,                    // plafond de l'audio, 100 à 5120 Mo ; au-delà, les plus anciens sont supprimés
+  "auto_correct": true,                    // corrige les mots douteux d'après le vocabulaire (moteur local)
+  "replacements": [],                      // règles [{ "from": "L 12 32 2", "to": "L. 1232-2" }]
   "onboarding_done": false,
   "wayland_restore_token": null            // jeton du portail RemoteDesktop, géré par Rust
 }
@@ -197,9 +206,18 @@ en français pour l'utilisateur.
 | `get_downloads` | — | `DownloadStatus[]`, y compris ceux lancés par Rust au démarrage |
 | `cancel_download`, `delete_model` | `id` | `()` |
 | `start_dictation`, `stop_dictation`, `cancel_dictation`, `toggle_dictation` | — | `()` |
-| `get_history` | — | `HistoryEntry[]`, du plus récent au plus ancien |
-| `delete_history_entry` | `id` | `()` |
-| `clear_history` | — | `()` |
+| `get_history` | — | `HistoryEntry[]` : les 500 plus récentes (accueil) |
+| `search_history` | `query` : `HistoryQuery` | `HistoryPage` (texte plein FTS5, dates, pagination) |
+| `delete_history_entry` | `id` | `()` ; supprime aussi l'audio et les corrections |
+| `clear_history` | — | `()` ; textes, corrections et audio |
+| `correct_history_entry` | `id`, `text` | `CorrectionResult` : entrée à jour et termes corrigés |
+| `get_vocabulary_suggestions` | — | `VocabularySuggestion[]` : termes corrigés au moins deux fois |
+| `dismiss_vocabulary_suggestion` | `term` | `()` |
+| `get_audio_usage` | — | `AudioUsage` |
+| `delete_all_audio` | — | `()` ; les textes restent |
+| `get_dictation_audio` | `id` | WAV en binaire (`ArrayBuffer`), décodé depuis l'Opus |
+| `export_history` | `query`, `format` : `"csv"`, `"json"` ou `"corpus"` | chemin créé dans Documents/Murmure |
+| `reveal_path` | `path` | `()` ; affiche le fichier dans le gestionnaire de fichiers |
 | `copy_text` | `text` | `()` |
 | `check_permissions`, `request_microphone` | — | `Permissions` |
 | `open_permission_settings` | `kind` : `"microphone"` ou `"accessibility"` | `()` |
@@ -233,8 +251,21 @@ en français pour l'utilisateur.
 type AudioDevice    = { name: string; is_default: boolean };
 type ModelInfo      = { id: string; name: string; description: string; size_mb: number;
                         downloaded: boolean; recommended: boolean; path: string | null };
-type HistoryEntry   = { id: string; text: string; created_at: string /* RFC 3339 */;
-                        duration_ms: number; latency_ms: number; engine: "local" | "remote"; model: string };
+type HistoryEntry   = { id: string; text: string /* texte courant : corrigé, sinon collé */;
+                        created_at: string /* RFC 3339 */; duration_ms: number; latency_ms: number;
+                        engine: "local" | "remote"; model: string; language: string;
+                        raw_text: string; final_text: string; corrected_text: string | null;
+                        corrected_at: string | null; auto_corrections: AutoCorrection[];
+                        has_audio: boolean; audio_bytes: number };
+type AutoCorrection = { from: string; to: string; probability: number };
+type Replacement    = { from: string; to: string };
+type HistoryQuery   = { text: string; from: string | null; to: string | null /* AAAA-MM-JJ inclus */;
+                        limit?: number; offset?: number };
+type HistoryPage    = { entries: HistoryEntry[]; total: number };
+type TermChange     = { wrong: string; right: string };
+type CorrectionResult = { entry: HistoryEntry; changes: TermChange[] };
+type VocabularySuggestion = { term: string; count: number; variants: string[] };
+type AudioUsage     = { bytes: number; files: number; cap_bytes: number; duration_ms: number };
 type DownloadStatus = { id: string; downloaded: number; total: number };
 type Permissions    = { microphone: "granted" | "denied" | "undetermined" | "unknown";
                         accessibility: "granted" | "denied" | "unknown" };
@@ -279,9 +310,12 @@ pub fn delete(data_dir: &Path, id: &str) -> anyhow::Result<()>;
 
 // engine/
 pub struct TranscribeOptions { pub language: Option<String> /* None = auto */, pub initial_prompt: Option<String> }
+pub struct Transcript { pub text: String, pub words: Vec<WordConfidence> }  // words vide en moteur serveur
 impl LocalEngine {
     pub fn load(model_path: &Path) -> anyhow::Result<LocalEngine>;   // lent : hors du thread de l'interface
     pub fn transcribe(&self, samples: &[f32], opts: &TranscribeOptions) -> anyhow::Result<String>;
+    /// Mots et confiance (probabilité la plus faible des tokens du mot, tokens spéciaux exclus).
+    pub fn transcribe_detailed(&self, samples: &[f32], opts: &TranscribeOptions) -> anyhow::Result<Transcript>;
 }
 impl RemoteEngine {
     pub async fn transcribe(&self, samples: &[f32], opts: &TranscribeOptions) -> anyhow::Result<String>;
@@ -427,6 +461,85 @@ Volume du périphérique de sortie par défaut, ramené à 30 % de sa valeur pen
   le réglage est alors sans effet.
 - **Windows** : `IAudioEndpointVolume` (Core Audio) du périphérique de rendu par défaut, rôle console.
 - Un son déjà coupé n'est pas touché.
+
+## Historique (`history/`)
+
+Base SQLite `history.sqlite3` dans le dossier de données (`rusqlite` avec la feature `bundled` : SQLite
+compilé dans le binaire, FTS5 compris, aucune dépendance système). Une base impossible à ouvrir ne bloque pas
+la dictée : les commandes de l'historique renvoient l'erreur.
+
+**Schéma** (version dans `PRAGMA user_version`, migrations dans `history::MIGRATIONS`, appliquées à
+l'ouverture ; une base plus récente que l'application est refusée sans être modifiée) :
+
+| Table | Contenu |
+|---|---|
+| `dictations` | `seq` (rowid stable), `id`, `created_at` (RFC 3339), `created_ms`, `duration_ms`, `latency_ms`, `engine`, `model`, `language`, `raw_text` (sortie du modèle), `final_text` (texte collé), `corrected_text` et `corrected_at` (correction manuelle), `auto_corrections` (JSON), `audio_file`, `audio_bytes` |
+| `dictations_fts` | FTS5, `unicode61 remove_diacritics 2`, texte courant (`corrected_text`, sinon `final_text`), tenu à jour par trois déclencheurs |
+| `corrections` | paire avant/après de chaque correction manuelle (`ON DELETE CASCADE`) |
+| `correction_terms` | termes corrigés (`wrong`, `right`) extraits par diff mot à mot |
+| `dismissed_suggestions` | propositions de vocabulaire écartées |
+
+`auto_vacuum = INCREMENTAL`, posé à la création ; `PRAGMA incremental_vacuum` et `wal_checkpoint(TRUNCATE)`
+après une suppression. `secure_delete` est actif : un texte supprimé est effacé du fichier. Journal WAL.
+
+**Migration.** Au premier lancement, `history.json` (v0.1.x) est importé dans une transaction
+(`raw_text` = `final_text` = l'ancien texte), puis renommé `history.json.migrated`. Un fichier illisible
+devient `history.json.illisible`. Rien n'est supprimé.
+
+**Recherche.** Chaque mot saisi devient un préfixe FTS5 entre guillemets (`"infirm"*`), tous requis ; les
+opérateurs FTS5 sont donc neutralisés. Dates : journées locales `AAAA-MM-JJ`, bornes incluses.
+
+**Audio.** Réglage `keep_audio`, actif par défaut : Opus mono 16 kHz, 20 kbit/s VBR, signal voix, trames de
+20 ms, conteneur Ogg (RFC 7845), soit environ 9 Mo par heure de parole (mesuré : 8,1 à 8,9 Mo/h sur le
+corpus du banc). Le WER de Whisper sur l'audio décodé ne bouge presque pas (7,10 % contre 6,95 % sur 50
+énoncés FLEURS, 5,31 % contre 5,18 % sur le corpus juridique). libopus 1.3 est compilée depuis les sources
+d'`audiopus_sys` (feature `static`) et liée statiquement ; `.cargo/config.toml` impose `LIBOPUS_NO_PKG`
+(jamais la bibliothèque du système) et `CMAKE_POLICY_VERSION_MINIMUM=3.5` (CMake 4). Fichiers
+`audio/<id>.ogg`, encodés en tâche de fond après le collage. Plafond `audio_cap_mb` (5 Go au plus, 100 Mo
+au moins) : après chaque dictée et quand le plafond baisse, l'audio des dictées les plus anciennes est
+supprimé jusqu'à repasser sous le plafond ; le texte reste. L'écoute passe par `get_dictation_audio`
+(WAV décodé par Rust), lisible par toutes les webviews.
+
+**Corrections manuelles.** `correct_history_entry` enregistre la paire avant/après et les termes corrigés :
+diff mot à mot (plus longue sous-suite commune après retrait du préfixe et du suffixe communs), seuls les
+remplacements de six mots au plus de chaque côté sont gardés, sans la ponctuation ni l'élision communes
+(« l'affirmation. » → « l'infirmation. » donne « affirmation » → « infirmation »). Un terme corrigé dans au
+moins deux corrections, absent du vocabulaire et des règles, non écarté et qui n'est pas un mot grammatical,
+est **proposé** dans l'historique : « Ajouter au vocabulaire » (ajout au prompt initial), « Créer une
+règle » (formes erronées vers le terme) ou « Ignorer ». Rien n'est ajouté sans clic.
+
+**Export.** Dans `Documents/Murmure` : CSV (point-virgule, BOM UTF-8, pour Excel en français), JSON, ou
+corpus (dossier `audio/*.ogg`, `metadata.csv` au format audiofolder de Hugging Face, `metadata.jsonl` avec
+texte corrigé, texte brut, langue, durée). L'export suit la recherche en cours.
+
+## Corrections automatiques (`correction.rs`)
+
+Après une transcription locale, `correction::finalize` applique dans l'ordre :
+
+1. **Mots douteux.** whisper.cpp donne une probabilité par token ; la confiance d'un mot est la plus faible
+   de ses tokens. Un mot (ou une suite de deux ou trois mots) dont la confiance est sous
+   `LOW_CONFIDENCE` (0,6) est comparé aux termes du vocabulaire (prompt initial découpé aux virgules,
+   points-virgules et retours à la ligne, termes de trois mots au plus et de cinq lettres au moins) et aux
+   cibles des règles. Distance de Levenshtein tolérée : 1 dès 5 caractères, 2 dès 8, sans tenir compte de
+   la casse. Égalité entre deux termes : rien. Élision (« l' », « d' ») et ponctuation conservées. Un mot
+   bien reconnu n'est jamais modifié ; un mot qu'on ne retrouve pas dans la sortie de Whisper non plus.
+   Réglage `auto_correct`. Le moteur serveur ne donne pas de confiance : pas de correction.
+2. **Mise en forme** : `postprocess::finalize` (mot de validation, ponctuation dictée, textes courts).
+3. **Règles de remplacement** (`replacements`) : expression exacte, insensible à la casse, mots entiers.
+
+Calibrage du seuil (tour, RTX 5060, turbo q5_0, beam 5, sans le vocabulaire dans le prompt, 12 dictées
+juridiques et 50 énoncés FLEURS, dictionnaire volontairement piégeux de 70 termes dont 50 noms propres) :
+
+| Seuil | Corrections utiles | Corrections nuisibles |
+|---|---|---|
+| 0,45 | 0 | 0 |
+| 0,6 | 1 (« l'information » 0,55 → « l'infirmation ») | 0 |
+| 0,7 | 2 | 1 (« durant » 0,68 → « Durand ») |
+| sans filtre | 5 | 3 (« matin » → « Martin » à 1,0, « mortel » → « Morel ») |
+
+Avec le vocabulaire dans le prompt (usage normal), Whisper ne doute presque plus : aucune correction sous
+0,8 sur ce corpus. Les erreurs restantes sont sûres d'elles (« l'affirmation » à 1,0) : elles relèvent des
+règles de remplacement, que l'historique propose de créer.
 
 ## Ponctuation dictée (`punctuation.rs`)
 

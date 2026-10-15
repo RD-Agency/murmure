@@ -10,6 +10,8 @@ import type {
   CommandName,
   EventMap,
   EventName,
+  ExportFormat,
+  HistoryQuery,
   PermissionKind,
   Settings,
 } from "./types";
@@ -83,8 +85,19 @@ export const api = {
   cancelDictation: () => call("cancel_dictation"),
   toggleDictation: () => call("toggle_dictation"),
   getHistory: () => call("get_history"),
+  searchHistory: (query: HistoryQuery) => call("search_history", { query }),
   deleteHistoryEntry: (id: string) => call("delete_history_entry", { id }),
   clearHistory: () => call("clear_history"),
+  /** Correction manuelle : renvoie l'entrée à jour et les termes corrigés. */
+  correctHistoryEntry: (id: string, text: string) => call("correct_history_entry", { id, text }),
+  getVocabularySuggestions: () => call("get_vocabulary_suggestions"),
+  dismissVocabularySuggestion: (term: string) => call("dismiss_vocabulary_suggestion", { term }),
+  getAudioUsage: () => call("get_audio_usage"),
+  deleteAllAudio: () => call("delete_all_audio"),
+  /** Audio d'une dictée, en WAV. */
+  getDictationAudio: (id: string) => call("get_dictation_audio", { id }),
+  exportHistory: (query: HistoryQuery, format: ExportFormat) => call("export_history", { query, format }),
+  revealPath: (path: string) => call("reveal_path", { path }),
   copyText: (text: string) => call("copy_text", { text }),
   checkPermissions: () => call("check_permissions"),
   requestMicrophone: () => call("request_microphone"),

@@ -289,3 +289,33 @@ export const IconUpload = (p: IconProps) => (
     <path d="M4.5 15v3.5a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5V15" />
   </Svg>
 );
+
+export const IconPlay = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M7.5 5.2v13.6a.8.8 0 0 0 1.2.7l10.6-6.8a.8.8 0 0 0 0-1.4L8.7 4.5a.8.8 0 0 0-1.2.7Z" />
+  </Svg>
+);
+
+export const IconPause = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M8.5 5v14" />
+    <path d="M15.5 5v14" />
+  </Svg>
+);
+
+export const IconPencil = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M15.2 5.2 18.8 8.8" />
+    <path d="M4.5 19.5 5.3 15.6 16.4 4.5a1.8 1.8 0 0 1 2.6 0l.5.5a1.8 1.8 0 0 1 0 2.6L8.4 18.7Z" />
+  </Svg>
+);
+
+export const IconAudio = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 10v4" />
+    <path d="M8 7v10" />
+    <path d="M12 4v16" />
+    <path d="M16 8v8" />
+    <path d="M20 11v2" />
+  </Svg>
+);

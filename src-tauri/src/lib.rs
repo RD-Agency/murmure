@@ -9,6 +9,7 @@ pub mod models;
 pub mod settings;
 
 // Modules système
+pub mod correction;
 pub mod history;
 pub mod ducking;
 pub mod hotkey;
@@ -28,7 +29,10 @@ pub mod wayland;
 pub mod portal;
 
 use crate::engine::RemoteEngine;
-use crate::history::HistoryEntry;
+use crate::history::{
+    AudioUsage, CorrectionResult, ExportFormat, HistoryEntry, HistoryPage, HistoryQuery, HistoryState,
+    VocabularySuggestion,
+};
 use crate::models::ModelInfo;
 use crate::pipeline::Command;
 use crate::settings::{EngineKind, Settings};
@@ -106,6 +110,18 @@ async fn apply_settings(app: &AppHandle, state: &AppState, mut settings: Setting
         return Err(format!("Impossible d'enregistrer les réglages : {e}"));
     }
     *state.settings.lock() = settings.clone();
+
+    // Plafond de l'audio abaissé : rotation immédiate.
+    if settings.audio_cap_bytes() < old.audio_cap_bytes()
+        && let Ok(db) = app.state::<HistoryState>().db()
+    {
+        let cap = settings.audio_cap_bytes();
+        tauri::async_runtime::spawn_blocking(move || {
+            if let Err(e) = db.enforce_audio_cap(cap) {
+                log::warn!("plafond de l'audio : {e:#}");
+            }
+        });
+    }
 
     // 3. Lancement à l'ouverture de session.
     if old.launch_at_login != settings.launch_at_login
@@ -335,30 +351,112 @@ fn toggle_dictation(app: AppHandle) {
 
 // ──────────────────────────────── Historique ─────────────────────────────────
 
-#[tauri::command]
-async fn get_history(state: State<'_, AppState>) -> CmdResult<Vec<HistoryEntry>> {
-    let data_dir = state.data_dir.clone();
-    tauri::async_runtime::spawn_blocking(move || history::load(&data_dir))
+/// Exécute `f` sur la base de l'historique, hors du thread de l'interface.
+async fn with_history<T: Send + 'static>(
+    history: &HistoryState,
+    f: impl FnOnce(&history::HistoryDb) -> anyhow::Result<T> + Send + 'static,
+) -> CmdResult<T> {
+    let db = history.db()?;
+    tauri::async_runtime::spawn_blocking(move || f(&db))
         .await
-        .map_err(err_str)
+        .map_err(err_str)?
+        .map_err(|e| format!("{e:#}"))
+}
+
+/// Les dictées les plus récentes (accueil).
+#[tauri::command]
+async fn get_history(history: State<'_, HistoryState>) -> CmdResult<Vec<HistoryEntry>> {
+    with_history(&history, |db| db.recent(history::RECENT_LIMIT)).await
 }
 
 #[tauri::command]
-async fn delete_history_entry(state: State<'_, AppState>, id: String) -> CmdResult<()> {
-    let data_dir = state.data_dir.clone();
-    tauri::async_runtime::spawn_blocking(move || history::delete(&data_dir, &id))
-        .await
-        .map_err(err_str)?
-        .map_err(err_str)
+async fn search_history(history: State<'_, HistoryState>, query: HistoryQuery) -> CmdResult<HistoryPage> {
+    with_history(&history, move |db| db.search(&query)).await
 }
 
 #[tauri::command]
-async fn clear_history(state: State<'_, AppState>) -> CmdResult<()> {
-    let data_dir = state.data_dir.clone();
-    tauri::async_runtime::spawn_blocking(move || history::clear(&data_dir))
-        .await
-        .map_err(err_str)?
-        .map_err(err_str)
+async fn delete_history_entry(history: State<'_, HistoryState>, id: String) -> CmdResult<()> {
+    with_history(&history, move |db| db.delete(&id)).await
+}
+
+#[tauri::command]
+async fn clear_history(history: State<'_, HistoryState>) -> CmdResult<()> {
+    with_history(&history, |db| db.clear()).await
+}
+
+/// Correction manuelle : nouveau texte, paire avant/après et termes corrigés.
+#[tauri::command]
+async fn correct_history_entry(history: State<'_, HistoryState>, id: String, text: String) -> CmdResult<CorrectionResult> {
+    with_history(&history, move |db| db.correct(&id, &text)).await
+}
+
+#[tauri::command]
+async fn get_vocabulary_suggestions(
+    state: State<'_, AppState>,
+    history: State<'_, HistoryState>,
+) -> CmdResult<Vec<VocabularySuggestion>> {
+    let s = state.settings();
+    with_history(&history, move |db| db.suggestions(&s.initial_prompt, &s.replacements)).await
+}
+
+#[tauri::command]
+async fn dismiss_vocabulary_suggestion(history: State<'_, HistoryState>, term: String) -> CmdResult<()> {
+    with_history(&history, move |db| db.dismiss_suggestion(&term)).await
+}
+
+#[tauri::command]
+async fn get_audio_usage(state: State<'_, AppState>, history: State<'_, HistoryState>) -> CmdResult<AudioUsage> {
+    let cap = state.settings().audio_cap_bytes();
+    with_history(&history, move |db| db.audio_usage(cap)).await
+}
+
+#[tauri::command]
+async fn delete_all_audio(history: State<'_, HistoryState>) -> CmdResult<()> {
+    with_history(&history, |db| db.delete_all_audio()).await
+}
+
+/// Audio d'une dictée en WAV, transmis en binaire (ArrayBuffer côté JavaScript).
+#[tauri::command]
+async fn get_dictation_audio(history: State<'_, HistoryState>, id: String) -> CmdResult<tauri::ipc::Response> {
+    with_history(&history, move |db| db.audio_wav(&id)).await.map(tauri::ipc::Response::new)
+}
+
+/// Exporte l'historique filtré dans Documents/Murmure ; renvoie le chemin créé.
+#[tauri::command]
+async fn export_history(
+    state: State<'_, AppState>,
+    history: State<'_, HistoryState>,
+    query: HistoryQuery,
+    format: ExportFormat,
+) -> CmdResult<String> {
+    let base = dirs::document_dir().unwrap_or_else(|| state.data_dir.clone()).join("Murmure");
+    let stamp = chrono::Local::now().format("%Y-%m-%d-%H%M%S");
+    let dest = match format {
+        ExportFormat::Csv => base.join(format!("historique-{stamp}.csv")),
+        ExportFormat::Json => base.join(format!("historique-{stamp}.json")),
+        ExportFormat::Corpus => base.join(format!("corpus-{stamp}")),
+    };
+    let path = dest.clone();
+    let n = with_history(&history, move |db| {
+        std::fs::create_dir_all(&base)?;
+        db.export(&query, format, &dest)
+    })
+    .await
+    .map_err(|e| format!("Export impossible : {e}"))?;
+    if n == 0 {
+        let _ = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+        return Err(match format {
+            ExportFormat::Corpus => "Aucune dictée avec audio à exporter.".into(),
+            _ => "Aucune dictée à exporter.".into(),
+        });
+    }
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// Affiche un fichier ou un dossier dans le gestionnaire de fichiers.
+#[tauri::command]
+fn reveal_path(app: AppHandle, path: String) -> CmdResult<()> {
+    app.opener().reveal_item_in_dir(path).map_err(err_str)
 }
 
 #[tauri::command]
@@ -485,6 +583,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     // Volume resté baissé si Murmure s'est arrêté brutalement pendant une dictée.
     ducking::recover(&config_dir);
     let settings = settings::load(&config_dir);
+    app.manage(HistoryState::open(&data_dir));
     let (tx, rx) = std::sync::mpsc::channel::<Command>();
     app.manage(AppState::new(config_dir, data_dir, settings.clone(), tx));
     app.manage(hotkey::Registered::default());
@@ -592,8 +691,17 @@ pub fn run() {
             cancel_dictation,
             toggle_dictation,
             get_history,
+            search_history,
             delete_history_entry,
             clear_history,
+            correct_history_entry,
+            get_vocabulary_suggestions,
+            dismiss_vocabulary_suggestion,
+            get_audio_usage,
+            delete_all_audio,
+            get_dictation_audio,
+            export_history,
+            reveal_path,
             copy_text,
             check_permissions,
             request_microphone,
