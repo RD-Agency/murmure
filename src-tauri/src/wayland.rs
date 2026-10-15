@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Session Wayland : détection, état des portails XDG exposé au front, conversions pures.
 //!
 //! Sous Wayland, les raccourcis globaux X11 (`tauri-plugin-global-shortcut`) ne sont pas reçus
