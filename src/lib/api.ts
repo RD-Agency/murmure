@@ -95,6 +95,11 @@ export const api = {
   checkUpdate: () => call("check_update"),
   /** Télécharge (événements `update-progress`), installe puis relance l'app. */
   installUpdate: () => call("install_update"),
+  getWaylandStatus: () => call("get_wayland_status"),
+  /** Wayland : demandes de portail (raccourci global + contrôle du clavier). */
+  waylandAuthorize: () => call("wayland_authorize"),
+  waylandConfigureShortcut: () => call("wayland_configure_shortcut"),
+  waylandRefresh: () => call("wayland_refresh"),
   /** Version de l'app en cours d'exécution. */
   getVersion: async (): Promise<string> => (isTauri ? getVersion() : (await loadMock()).MOCK_VERSION),
 };

@@ -59,6 +59,12 @@ fs4 = "1"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Wayland : raccourci global (GlobalShortcuts) et collage (RemoteDesktop) via les portails XDG.
+ashpd = { version = "0.13", default-features = false, features = ["tokio", "global_shortcuts", "remote_desktop", "screencast", "notification"] }
+# Presse-papiers Wayland natif (wlr-data-control / ext-data-control) ; repli X11 automatique.
+arboard = { version = "3", features = ["wayland-data-control"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.15", features = ["metal", "raw-api"] }
 # Permissions (AVFoundation) et réglages fins de la fenêtre overlay (NSWindow)

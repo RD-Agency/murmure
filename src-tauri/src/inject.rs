@@ -7,8 +7,12 @@
 //! macOS : enigo interroge le clavier courant via Text Input Sources (TIS) pour
 //! `Key::Unicode`, API qui exige le thread principal sur les macOS récents :
 //! la frappe est donc exécutée via `run_on_main_thread`.
-//! Linux Wayland : enigo (x11rb) ne fonctionne pas → `wtype`, `ydotool`, puis
-//! `xdotool` (XWayland) ; à défaut le texte reste dans le presse-papiers.
+//! Linux Wayland : enigo (x11rb) n'atteint pas les fenêtres natives. Ordre ([`paste_plan`]) :
+//! portail RemoteDesktop (`portal.rs`) → `ydotool` (si `ydotoold` répond) → `wtype` (refusé
+//! par KWin, accepté par les compositeurs wlroots) → à défaut « copié seulement » + notification.
+//! Presse-papiers Wayland : arboard avec `wayland-data-control` (wlr / ext-data-control, KWin
+//! et wlroots), repli X11 via XWayland sinon (GNOME) ; le contenu est servi par un thread de
+//! fond tant que Murmure tourne.
 //!
 //! Ces fonctions sont bloquantes : à appeler depuis `spawn_blocking`.
 
@@ -94,12 +98,56 @@ fn paste(app: &AppHandle, text: &str, restore: bool) -> Result<Outcome, String> 
 
 /// Session Wayland ?
 pub fn is_wayland() -> bool {
-    cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty())
+    crate::wayland::is_wayland_session()
 }
+
+/// Méthode de simulation de Ctrl+V.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PasteMethod {
+    /// enigo (X11, macOS, Windows).
+    Enigo,
+    /// Portail `org.freedesktop.portal.RemoteDesktop` (Wayland).
+    Portal,
+    /// `ydotool` + démon `ydotoold` (uinput).
+    Ydotool,
+    /// `wtype` (protocole virtual-keyboard, compositeurs wlroots).
+    Wtype,
+}
+
+/// Ce qui est disponible sur la machine au moment du collage.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PasteEnv {
+    pub wayland: bool,
+    pub portal_ready: bool,
+    pub ydotoold: bool,
+    pub wtype: bool,
+}
+
+/// Méthodes à essayer, dans l'ordre. Vide → copie seule.
+pub fn paste_plan(env: PasteEnv) -> Vec<PasteMethod> {
+    if !env.wayland {
+        return vec![PasteMethod::Enigo];
+    }
+    let mut plan = Vec::with_capacity(3);
+    if env.portal_ready {
+        plan.push(PasteMethod::Portal);
+    }
+    if env.ydotoold {
+        plan.push(PasteMethod::Ydotool);
+    }
+    if env.wtype {
+        plan.push(PasteMethod::Wtype);
+    }
+    plan
+}
+
+/// Message quand le texte n'a pu qu'être copié sous Wayland.
+pub const WAYLAND_COPIED_MSG: &str = "Texte copié — collez avec Ctrl+V. Pour coller automatiquement, \
+     autorisez Murmure dans Réglages › Raccourci.";
 
 fn send_paste_keystroke(app: &AppHandle) -> Result<(), String> {
     if is_wayland() {
-        return paste_wayland();
+        return paste_wayland(app);
     }
     #[cfg(target_os = "macos")]
     {
@@ -143,29 +191,123 @@ fn enigo_paste() -> Result<(), String> {
     click.and(release)
 }
 
-/// Essaie successivement les outils de frappe disponibles sous Wayland.
-fn paste_wayland() -> Result<(), String> {
-    const TOOLS: &[(&str, &[&str])] = &[
-        ("wtype", &["-M", "ctrl", "v", "-m", "ctrl"]),
-        ("ydotool", &["key", "29:1", "47:1", "47:0", "29:0"]),
-        ("xdotool", &["key", "--clearmodifiers", "ctrl+v"]),
-    ];
-    for (bin, args) in TOOLS {
-        match std::process::Command::new(bin)
-            .args(*args)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-        {
-            Ok(status) if status.success() => {
-                log::debug!("collage Wayland via {bin}");
+/// Exécutable présent dans le PATH ?
+fn in_path(bin: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths).any(|dir| {
+            let p = dir.join(bin);
+            p.is_file()
+        })
+    })
+}
+
+/// Socket de `ydotoold` joignable ? (`YDOTOOL_SOCKET`, sinon `$XDG_RUNTIME_DIR/.ydotool_socket`,
+/// sinon `/tmp/.ydotool_socket`). Sans démon, `ydotool` échoue ou ne fait rien.
+#[cfg(unix)]
+fn ydotoold_reachable() -> bool {
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(p) = std::env::var_os("YDOTOOL_SOCKET") {
+        candidates.push(p.into());
+    } else {
+        if let Some(d) = std::env::var_os("XDG_RUNTIME_DIR") {
+            candidates.push(std::path::Path::new(&d).join(".ydotool_socket"));
+        }
+        candidates.push("/tmp/.ydotool_socket".into());
+    }
+    candidates.iter().any(|path| {
+        std::os::unix::net::UnixDatagram::unbound().is_ok_and(|sock| sock.connect(path).is_ok())
+    }) && in_path("ydotool")
+}
+
+#[cfg(not(unix))]
+fn ydotoold_reachable() -> bool {
+    false
+}
+
+/// Outil de secours détecté (affiché dans les réglages).
+pub fn wayland_fallback_tool() -> Option<&'static str> {
+    if ydotoold_reachable() {
+        Some("ydotool")
+    } else if in_path("wtype") {
+        Some("wtype")
+    } else {
+        None
+    }
+}
+
+fn run_tool(bin: &str, args: &[&str]) -> Result<(), String> {
+    match std::process::Command::new(bin)
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+    {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(format!("{bin} a échoué ({status})")),
+        Err(e) => Err(format!("{bin} indisponible : {e}")),
+    }
+}
+
+/// Collage sous Wayland selon [`paste_plan`].
+fn paste_wayland(app: &AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    let portal_ready = crate::portal::keyboard_ready(app);
+    #[cfg(not(target_os = "linux"))]
+    let portal_ready = {
+        let _ = app;
+        false
+    };
+    let env = PasteEnv { wayland: true, portal_ready, ydotoold: ydotoold_reachable(), wtype: in_path("wtype") };
+    for method in paste_plan(env) {
+        let res = match method {
+            #[cfg(target_os = "linux")]
+            PasteMethod::Portal => crate::portal::paste_blocking(app),
+            // KEY_LEFTCTRL = 29, KEY_V = 47 (codes evdev).
+            PasteMethod::Ydotool => run_tool("ydotool", &["key", "29:1", "47:1", "47:0", "29:0"]),
+            PasteMethod::Wtype => run_tool("wtype", &["-M", "ctrl", "v", "-m", "ctrl"]),
+            _ => continue,
+        };
+        match res {
+            Ok(()) => {
+                log::debug!("collage Wayland via {method:?}");
                 return Ok(());
             }
-            Ok(status) => log::debug!("{bin} a échoué ({status})"),
-            Err(e) => log::debug!("{bin} indisponible : {e}"),
+            Err(e) => log::debug!("collage Wayland via {method:?} : {e}"),
         }
     }
-    Err("Texte copié dans le presse-papiers — collez-le avec Ctrl+V \
-         (installez wtype ou ydotool pour le collage automatique sous Wayland)."
-        .to_string())
+    #[cfg(target_os = "linux")]
+    crate::portal::notify(app, "Texte copié", "Collez-le avec Ctrl+V.");
+    Err(WAYLAND_COPIED_MSG.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use PasteMethod::*;
+
+    fn env(wayland: bool, portal_ready: bool, ydotoold: bool, wtype: bool) -> PasteEnv {
+        PasteEnv { wayland, portal_ready, ydotoold, wtype }
+    }
+
+    #[test]
+    fn x11_et_autres_plateformes_utilisent_enigo() {
+        assert_eq!(paste_plan(env(false, false, false, false)), [Enigo]);
+        // Hors Wayland, les outils Wayland sont ignorés même s'ils sont installés.
+        assert_eq!(paste_plan(env(false, true, true, true)), [Enigo]);
+    }
+
+    #[test]
+    fn wayland_ordre_de_repli() {
+        assert_eq!(paste_plan(env(true, true, true, true)), [Portal, Ydotool, Wtype]);
+        assert_eq!(paste_plan(env(true, true, false, false)), [Portal]);
+        assert_eq!(paste_plan(env(true, false, true, true)), [Ydotool, Wtype]);
+        assert_eq!(paste_plan(env(true, false, false, true)), [Wtype]);
+        assert_eq!(paste_plan(env(true, true, false, true)), [Portal, Wtype]);
+    }
+
+    #[test]
+    fn wayland_sans_outil_copie_seulement() {
+        assert!(paste_plan(env(true, false, false, false)).is_empty());
+        assert!(!paste_plan(env(true, false, false, false)).contains(&Enigo));
+    }
 }

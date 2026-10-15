@@ -14,6 +14,7 @@ import type {
   Permissions,
   Platform,
   Settings,
+  WaylandStatus,
 } from "./types";
 
 const STORAGE_KEY = "murmure-mock-v1";
@@ -35,6 +36,7 @@ const DEFAULT_SETTINGS: Settings = {
   launch_at_login: false,
   history_enabled: true,
   onboarding_done: false,
+  wayland_restore_token: null,
 };
 
 const CATALOG: Omit<ModelInfo, "downloaded" | "path">[] = [
@@ -500,6 +502,40 @@ async function installUpdate() {
   location.href = location.pathname;
 }
 
+// ---------- Wayland (`?wayland` simule une session KDE Wayland, `?wayland=deny` un refus) ----------
+
+const waylandParam = new URLSearchParams(location.search).get("wayland");
+let wayland: WaylandStatus = {
+  wayland: waylandParam !== null,
+  shortcut: "inactive",
+  shortcut_trigger: null,
+  shortcut_configurable: true,
+  shortcut_error: null,
+  keyboard: "inactive",
+  keyboard_error: null,
+  paste_fallback: null,
+};
+
+async function waylandAuthorize(): Promise<WaylandStatus> {
+  if (!wayland.wayland) return wayland;
+  wayland = { ...wayland, shortcut: "pending", shortcut_error: null };
+  mockEmit("wayland-status", wayland);
+  await sleep(1200);
+  wayland =
+    waylandParam === "deny"
+      ? { ...wayland, shortcut: "denied", shortcut_error: "Raccourci non accordé : Demande refusée." }
+      : { ...wayland, shortcut: "active", shortcut_trigger: "Ctrl+Alt+Espace" };
+  wayland = { ...wayland, keyboard: "pending", keyboard_error: null };
+  mockEmit("wayland-status", wayland);
+  await sleep(1000);
+  wayland =
+    waylandParam === "deny"
+      ? { ...wayland, keyboard: "denied", keyboard_error: "Contrôle du clavier non accordé : Demande refusée." }
+      : { ...wayland, keyboard: "active" };
+  mockEmit("wayland-status", wayland);
+  return wayland;
+}
+
 // ---------- Commandes ----------
 
 type Impl = {
@@ -589,6 +625,14 @@ const impl: Impl = {
   get_acceleration: () => (detectPlatform() === "macos" ? "Metal · Apple M2" : "Vulkan · NVIDIA GeForce RTX 5050"),
   check_update: () => checkUpdate(),
   install_update: () => installUpdate(),
+  get_wayland_status: () => wayland,
+  wayland_authorize: () => waylandAuthorize(),
+  wayland_configure_shortcut: async () => {
+    await sleep(300);
+    wayland = { ...wayland, shortcut_trigger: "Meta+D" };
+    mockEmit("wayland-status", wayland);
+  },
+  wayland_refresh: () => wayland,
 };
 
 export async function mockInvoke(cmd: CommandName, args: unknown): Promise<unknown> {

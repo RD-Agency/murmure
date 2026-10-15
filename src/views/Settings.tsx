@@ -20,6 +20,7 @@ import { Segmented } from "../components/Segmented";
 import { Select } from "../components/Select";
 import { Switch } from "../components/Switch";
 import { UpdateRow } from "../components/UpdateBanner";
+import { useWayland, WaylandPanel } from "../components/WaylandPanel";
 import { api } from "../lib/api";
 import { LANGUAGES } from "../lib/format";
 import type { AudioDevice, HotkeyMode } from "../lib/types";
@@ -41,6 +42,7 @@ export function Settings() {
   const platform = useApp((s) => s.platform);
   const update = useApp((s) => s.updateSettings);
   const [devices, setDevices] = useState<AudioDevice[]>([]);
+  const wayland = useWayland();
 
   useEffect(() => {
     api.listInputDevices().then(setDevices).catch(() => setDevices([]));
@@ -133,9 +135,13 @@ export function Settings() {
           {/* Raccourci */}
           <Section id="raccourci" title="Raccourci" icon={<IconKeyboard size={15} />}>
             <Group>
-              <Row label="Raccourci global" description="Fonctionne dans toutes les applications." align="start">
-                <HotkeyRecorder value={settings.hotkey} platform={platform} onChange={(hotkey) => update({ hotkey })} />
-              </Row>
+              {wayland ? (
+                <WaylandPanel status={wayland} />
+              ) : (
+                <Row label="Raccourci global" description="Fonctionne dans toutes les applications." align="start">
+                  <HotkeyRecorder value={settings.hotkey} platform={platform} onChange={(hotkey) => update({ hotkey })} />
+                </Row>
+              )}
               <div className="px-4 py-3.5">
                 <div className="mb-2.5 text-[13px] font-medium text-fg" id="mode-label">
                   Comportement
@@ -172,7 +178,11 @@ export function Settings() {
                     );
                   })}
                 </div>
-                <p className="mt-2.5 text-[12px] text-subtle">Échap annule une dictée en cours.</p>
+                <p className="mt-2.5 text-[12px] text-subtle">
+                  {wayland
+                    ? "Sous Wayland, Échap n'est pas capté hors de Murmure : terminez avec le raccourci, puis annulez avec Ctrl+Z si besoin."
+                    : "Échap annule une dictée en cours."}
+                </p>
               </div>
             </Group>
           </Section>

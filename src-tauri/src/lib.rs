@@ -16,6 +16,9 @@ pub mod state;
 pub mod tray;
 pub mod punctuation;
 pub mod updater;
+pub mod wayland;
+#[cfg(target_os = "linux")]
+pub mod portal;
 
 use crate::engine::RemoteEngine;
 use crate::history::HistoryEntry;
@@ -69,8 +72,10 @@ fn get_settings(state: State<'_, AppState>) -> Settings {
 }
 
 #[tauri::command]
-async fn save_settings(app: AppHandle, state: State<'_, AppState>, settings: Settings) -> CmdResult<()> {
+async fn save_settings(app: AppHandle, state: State<'_, AppState>, mut settings: Settings) -> CmdResult<()> {
     let old = state.settings();
+    // Champ géré par Rust (portail Wayland) : la copie du front peut être périmée.
+    settings.wayland_restore_token = old.wayland_restore_token.clone();
 
     // 1. Raccourci d'abord : en cas d'échec, rien n'est enregistré.
     hotkey::validate(&settings.hotkey)?;
@@ -331,6 +336,52 @@ async fn get_acceleration() -> CmdResult<String> {
         .map_err(err_str)
 }
 
+// ─────────────────────────────── Wayland ──────────────────────────────────────
+
+#[tauri::command]
+fn get_wayland_status(app: AppHandle) -> wayland::WaylandStatus {
+    wayland::status(&app)
+}
+
+/// Déclenche les demandes de portail (raccourci global + contrôle du clavier) et renvoie l'état.
+#[tauri::command]
+async fn wayland_authorize(app: AppHandle) -> CmdResult<wayland::WaylandStatus> {
+    #[cfg(target_os = "linux")]
+    {
+        if !wayland::is_wayland_session() {
+            return Ok(wayland::status(&app));
+        }
+        Ok(portal::authorize(&app).await)
+    }
+    #[cfg(not(target_os = "linux"))]
+    Ok(wayland::status(&app))
+}
+
+/// Ouvre le réglage du raccourci du bureau (portail GlobalShortcuts v2).
+#[tauri::command]
+async fn wayland_configure_shortcut(app: AppHandle) -> CmdResult<()> {
+    #[cfg(target_os = "linux")]
+    {
+        portal::configure_shortcut(&app).await
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = app;
+        Err("Sans objet sur cette plateforme.".into())
+    }
+}
+
+/// Relit le raccourci attribué par le bureau (après une modification dans KDE).
+#[tauri::command]
+async fn wayland_refresh(app: AppHandle) -> wayland::WaylandStatus {
+    #[cfg(target_os = "linux")]
+    {
+        portal::refresh_trigger(&app).await;
+        wayland::update(&app, |s| s.paste_fallback = inject::wayland_fallback_tool().map(str::to_string));
+    }
+    wayland::status(&app)
+}
+
 // ───────────────────────────── Mises à jour ──────────────────────────────────
 
 /// Vérifie maintenant ; `None` si l'app est à jour (ou manifeste pas encore publié).
@@ -365,6 +416,9 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(AppState::new(config_dir, data_dir, settings.clone(), tx));
     app.manage(hotkey::Registered::default());
     app.manage(updater::UpdaterState::default());
+    app.manage(wayland::WaylandShared::default());
+    #[cfg(target_os = "linux")]
+    app.manage(portal::Portals::default());
     pipeline::spawn_worker(handle.clone(), rx);
 
     tray::create(&handle)?;
@@ -372,6 +426,12 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     if let Err(e) = hotkey::apply(&handle, &settings.hotkey) {
         log::error!("{e}");
+    }
+    // Wayland : raccourci global et collage via les portails XDG.
+    #[cfg(target_os = "linux")]
+    if wayland::is_wayland_session() {
+        log::info!("session Wayland : raccourci et collage via les portails XDG");
+        portal::init(&handle, &settings);
     }
     if let Err(e) = apply_autostart(&handle, settings.launch_at_login) {
         log::warn!("autostart : {e}");
@@ -463,6 +523,10 @@ pub fn run() {
             get_acceleration,
             check_update,
             install_update,
+            get_wayland_status,
+            wayland_authorize,
+            wayland_configure_shortcut,
+            wayland_refresh,
         ])
         .build(tauri::generate_context!());
 
