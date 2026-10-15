@@ -1,0 +1,69 @@
+Murmure
+Copyright © 2026 RD Agency (Rayan Drissi)
+
+Ce programme est un logiciel libre : vous pouvez le redistribuer et le modifier selon les termes de la
+GNU Affero General Public License publiée par la Free Software Foundation, en version 3 ou (à votre choix)
+toute version ultérieure (SPDX : AGPL-3.0-or-later). Il est distribué sans aucune garantie. Voir le
+fichier LICENSE.
+
+Exception NVIDIA CUDA : une permission additionnelle au sens de la section 7 de l'AGPL autorise la
+distribution de Murmure liée aux bibliothèques NVIDIA CUDA. Voir LICENSE-EXCEPTION-CUDA.md.
+
+
+Composants tiers
+================
+
+Murmure s'appuie sur les composants suivants. Chacun reste soumis à sa propre licence. La liste complète
+des bibliothèques Rust, avec leurs licences, s'obtient avec `cargo metadata` dans src-tauri/ ; celle des
+paquets JavaScript avec `pnpm licenses list`.
+
+Application de bureau (src-tauri/, src/)
+
+  whisper.cpp et ggml (Georgi Gerganov et contributeurs)        MIT
+    intégrés via les crates whisper-rs et whisper-rs-sys        Unlicense
+  Tauri et ses greffons (The Tauri Programme)                   MIT ou Apache-2.0
+  cpal, hound, rubato (audio)                                   Apache-2.0 ; MIT
+  enigo, arboard (clavier, presse-papiers)                      MIT ; MIT ou Apache-2.0
+  ashpd, zbus (portails XDG, D-Bus, Linux)                      MIT
+  keyring (trousseau du système)                                MIT ou Apache-2.0
+  reqwest, tokio, serde                                         MIT ou Apache-2.0 ; MIT ; MIT ou Apache-2.0
+  rustls, ring, webpki-roots                                    Apache-2.0, ISC, MIT ; Apache-2.0 et ISC ;
+                                                                CDLA-Permissive-2.0
+  cssparser, selectors (via Tauri)                              MPL-2.0
+  React, React DOM                                              MIT
+  zustand                                                       MIT
+  Tailwind CSS, Vite, TypeScript (outils de compilation)        MIT ; MIT ; Apache-2.0
+
+Les autres crates Rust sont sous licences MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, Zlib,
+BSL-1.0, Unicode-3.0, Unlicense ou CC0-1.0, toutes compatibles avec l'AGPL v3.
+
+Variante Linux NVIDIA (paquets *-linux-x64-cuda.*)
+
+  NVIDIA CUDA Runtime (libcudart), cuBLAS (libcublas, libcublasLt)
+  Copyright © NVIDIA Corporation. Logiciel propriétaire, redistribué selon le
+  NVIDIA CUDA Toolkit End User License Agreement : https://docs.nvidia.com/cuda/eula/
+  Ces bibliothèques ne sont pas couvertes par l'AGPL. Voir LICENSE-EXCEPTION-CUDA.md.
+
+Variante Linux Vulkan (paquets *-linux-x64-vulkan.*)
+
+  Aucune bibliothèque tierce embarquée en plus de la variante standard. Le chargeur Vulkan
+  (libvulkan.so.1, Apache-2.0) et le pilote graphique sont fournis par le système.
+
+Modèles de reconnaissance vocale
+
+  Les modèles ne sont pas inclus dans les installeurs : ils sont téléchargés au premier lancement.
+  Whisper (OpenAI), poids publiés sous licence MIT.
+    Application : conversions ggml publiées dans le dépôt Hugging Face ggerganov/whisper.cpp (MIT).
+    Serveur : conversion CTranslate2 de large-v3-turbo chargée par faster-whisper (MIT).
+
+Serveur de transcription (server/)
+
+  faster-whisper (SYSTRAN), modèle VAD Silero inclus             MIT
+  CTranslate2 (OpenNMT)                                          MIT
+  PyAV                                                           BSD-3-Clause
+    ses wheels embarquent FFmpeg                                 LGPL-2.1-or-later
+  FastAPI, Pydantic, pydantic-settings                           MIT
+  Uvicorn                                                        BSD-3-Clause
+  python-multipart                                               Apache-2.0
+  Image Docker GPU : basée sur nvidia/cuda (CUDA et cuDNN), soumise aux licences de NVIDIA.
+  Elle n'est pas publiée par RD Agency : chacun la construit lui-même à partir du Dockerfile.

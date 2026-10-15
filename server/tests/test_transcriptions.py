@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Endpoint de transcription : formats de réponse, paramètres, erreurs, limites."""
 
 from __future__ import annotations

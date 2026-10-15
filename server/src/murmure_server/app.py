@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Application FastAPI : `POST /v1/audio/transcriptions`, `GET /v1/models`, `GET /health`."""
 
 from __future__ import annotations

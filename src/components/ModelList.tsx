@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { useState } from "react";
 import { downloadPercent, formatProgressSize, formatSize } from "../lib/format";
 import type { ModelInfo } from "../lib/types";

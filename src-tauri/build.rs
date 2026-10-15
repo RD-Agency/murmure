@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 fn main() {
     // Le backend Metal de whisper.cpp utilise `@available`, qui appelle
     // `__isPlatformVersionAtLeast` (runtime clang). Quand une version minimale de macOS

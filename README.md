@@ -1,154 +1,156 @@
 # Murmure
 
-Dictée vocale façon Wispr Flow, pour macOS, Linux et Windows. On maintient un raccourci, on parle,
-on relâche : le texte arrive là où se trouve le curseur, dans n'importe quelle application.
+Murmure est une application de dictée vocale pour macOS, Windows et Linux. Vous maintenez un raccourci
+clavier, vous parlez, vous relâchez : le texte est collé là où se trouve le curseur, dans n'importe quelle
+application. Le principe est celui de Wispr Flow, mais la reconnaissance vocale tourne sur votre machine et
+rien n'en sort.
 
-Deux moteurs au choix :
+La transcription repose sur Whisper large-v3-turbo, exécuté localement par whisper.cpp. Pour les postes
+trop modestes, Murmure peut aussi envoyer l'audio à un serveur de transcription, y compris celui fourni
+dans ce dépôt.
 
-- **Sur cet appareil** : Whisper large-v3-turbo via whisper.cpp. Hors ligne, rien ne sort de la machine.
-  Accélération Metal sur Mac ; sous Linux, variantes NVIDIA (CUDA) et Vulkan (NVIDIA, AMD, Intel),
-  repli automatique sur le processeur sans GPU utilisable.
-- **Serveur** : n'importe quel endpoint compatible OpenAI (`/v1/audio/transcriptions`) avec une clé API :
-  notre serveur auto-hébergé (`server/`), OpenAI ou Groq.
+## Fonctionnalités
 
-## Utilisation
+- Reconnaissance vocale locale, hors ligne, accélérée par Metal sur Mac, par CUDA ou Vulkan sous Linux,
+  avec repli automatique sur le processeur.
+- Moteur « Serveur » au choix : tout service compatible avec l'API OpenAI `/v1/audio/transcriptions`,
+  notamment le serveur auto-hébergé de `server/`.
+- Ponctuation dictée en français : « virgule », « point à la ligne », « ouvrez les guillemets »…
+- Raccourci en maintien (on parle tant que la touche est enfoncée), en bascule, ou les deux selon la durée
+  de l'appui.
+- Collage automatique dans l'application active, avec restauration du presse-papiers.
+- Mises à jour automatiques et silencieuses, signées.
+- Sous Linux, trois variantes (standard, NVIDIA et Vulkan), sessions X11 et Wayland.
 
-| Geste | Effet |
-|---|---|
-| Maintenir **⌥ Espace** (Mac) / **Ctrl+Alt+Espace** (Linux, Windows) | Push-to-talk : on parle, on relâche, c'est collé |
-| Appui bref | Mains libres ; un second appui arrête |
-| **Échap** pendant l'enregistrement | Annule |
+## Télécharger
 
-Le raccourci, le mode (hybride, maintien, bascule), la langue, le vocabulaire, le micro et le collage se règlent dans l'app.
-La clé API est rangée dans le trousseau du système, jamais dans un fichier.
+Les installeurs de la dernière version sont sur la page publique :
+<https://crgenerator.s3.eu-west-par.io.cloud.ovh.net/murmure/index.html>
 
-## Développement
+La page détecte votre système et donne, pour Linux, la commande d'installation adaptée à votre
+distribution. Chaque version est aussi publiée dans les
+[releases GitHub](https://github.com/RD-Agency/murmure/releases), avec un fichier `SHA256SUMS.txt`.
 
-Prérequis : Rust stable, Node 22+, pnpm, CMake. Linux : `libwebkit2gtk-4.1-dev libasound2-dev libxdo-dev clang`.
+## Installer
+
+**macOS** (Apple Silicon et Intel) : ouvrez le `.dmg` et glissez Murmure dans Applications. L'application
+est signée et notarisée par Apple.
+
+**Windows** 10 et 11 : lancez `Murmure-…-windows-x64-setup.exe`. L'installeur n'est pas encore signé :
+SmartScreen peut demander de cliquer sur « Informations complémentaires », puis « Exécuter quand même ».
+
+**Linux** : il faut glibc 2.34 ou plus récente et webkit2gtk-4.1. Murmure est testé sur openSUSE Leap 15.6
+et 16.0, Tumbleweed, Fedora 43 et 44, Debian 12 et 13, Ubuntu 22.04 et 24.04, et Linux Mint 22.
+Choisissez la variante selon votre carte graphique :
+
+- **standard** (`.rpm`, `.deb` ou `.AppImage`) : fonctionne partout, transcription sur le processeur ;
+- **NVIDIA** (`-cuda`, `.rpm` ou `.deb`) : CUDA 12 est inclus, seul le pilote propriétaire NVIDIA est requis ;
+- **Vulkan** (`-vulkan`, `.rpm` ou `.deb`) : cartes NVIDIA, AMD et Intel, paquet léger, seul le pilote
+  graphique est requis. C'est aussi la solution de secours si la variante NVIDIA ne démarre pas.
+
+Par exemple, sur Fedora avec une carte AMD :
+
+```bash
+curl -LO https://crgenerator.s3.eu-west-par.io.cloud.ovh.net/murmure/latest/Murmure-linux-x64-vulkan.rpm
+sudo dnf install -y ./Murmure-linux-x64-vulkan.rpm
+```
+
+Sur openSUSE, les paquets ne sont pas signés : `sudo zypper install --allow-unsigned-rpm ./Murmure-….rpm`.
+Les détails par distribution, le son et le dépannage sont dans [docs/linux.md](docs/linux.md).
+
+Au premier lancement, Murmure télécharge le modèle de reconnaissance vocale (environ 550 Mo). Ensuite, tout
+fonctionne hors ligne. Pour préparer un parc de postes, `murmure --install-model` installe le modèle à
+l'avance, sans ouvrir de fenêtre.
+
+## Autorisations
+
+**macOS** : Murmure demande l'accès au micro, et l'accès à l'Accessibilité pour coller le texte dans les
+autres applications. L'assistant du premier lancement ouvre directement les bons panneaux des Réglages.
+
+**Linux, session X11** : aucune autorisation n'est nécessaire.
+
+**Linux, session Wayland** (KDE Plasma 5.27 ou plus récent, GNOME 48 ou plus récent) : Murmure passe par
+les portails XDG du bureau. Au premier lancement, le bouton « Autoriser Murmure » déclenche deux demandes
+du bureau, une seule fois : le raccourci global, que vous pouvez changer à ce moment-là, puis le contrôle du
+clavier, qui sert uniquement à taper Ctrl+V. Si le bureau ne propose pas ces portails, Murmure se replie
+sur `ydotool`, ou copie simplement le texte et vous invite à le coller. La marche à suivre est dans
+[docs/linux.md](docs/linux.md#wayland).
+
+**Windows** : aucune autorisation particulière.
+
+## Premiers pas
+
+Le raccourci par défaut est Option+Espace sur Mac et Ctrl+Alt+Espace sous Windows et Linux.
+
+- Maintenez le raccourci, parlez, relâchez : le texte est collé.
+- Un appui bref passe en mains libres ; un second appui arrête la dictée.
+- Échap annule la dictée en cours (sauf sous Wayland, où Murmure ne capte pas les touches globalement).
+
+Une pastille discrète indique l'enregistrement et la transcription. La fenêtre principale sert surtout aux
+réglages : raccourci, langue, micro, vocabulaire (noms propres, termes techniques), mode de collage et
+moteur. L'historique des dictées reste sur la machine et peut être désactivé.
+
+## Confidentialité
+
+Avec le moteur « Sur cet appareil », l'audio et le texte ne quittent jamais la machine. Murmure n'envoie
+aucune statistique d'usage et ne contient aucun outil de mesure d'audience.
+
+Murmure se connecte à Internet dans trois cas seulement :
+
+- le téléchargement du modèle, une fois, depuis Hugging Face (`huggingface.co/ggerganov/whisper.cpp`) ;
+- la vérification des mises à jour, dix secondes après le démarrage puis toutes les heures : une simple
+  lecture du fichier `latest.json` sur la page de téléchargement, sans identifiant ;
+- le moteur « Serveur », si vous le choisissez : l'audio de chaque dictée est alors envoyé au serveur
+  configuré. Avec un service tiers comme OpenAI ou Groq, l'audio quitte votre infrastructure.
+
+Les réglages et l'historique sont des fichiers JSON locaux. La clé API du moteur « Serveur » est rangée
+dans le trousseau du système, jamais dans un fichier.
+
+## Compiler depuis les sources
+
+Il faut Rust stable, Node.js 22 ou plus récent, pnpm et CMake (et, sous Linux, les bibliothèques de
+développement de webkit2gtk et d'ALSA).
 
 ```bash
 pnpm install
-pnpm tauri dev          # application complète
-pnpm dev                # front seul dans le navigateur, en mode démo (données factices)
-pnpm tauri build        # installeurs (.dmg, .deb/.rpm/AppImage, .msi)
-pnpm tauri build -- --features cuda     # Linux/Windows avec GPU NVIDIA (CUDA Toolkit requis)
-pnpm tauri build -- --features vulkan   # GPU NVIDIA/AMD/Intel via Vulkan (Linux : libvulkan-dev + glslc)
+pnpm tauri dev                            # application complète en mode développement
+pnpm tauri build                          # installeurs pour le système courant
+pnpm tauri build -- --features vulkan     # variante Vulkan (Linux)
 ```
 
-`cuda` et `vulkan` s'excluent. Sous Ubuntu 22.04, `glslc` n'est pas packagé : la CI prend `glslc` et les en-têtes
-dans le SDK LunarG (`VULKAN_SDK`). L'accélération retenue s'affiche dans l'app (« Accélération : Vulkan · … ») et
-dans le journal (`Accélération : Vulkan (NVIDIA GeForce RTX 5050)`).
+Les prérequis par système, les variantes GPU, les tests et la publication d'une version sont décrits dans
+[docs/developpement.md](docs/developpement.md). L'organisation du code est dans
+[ARCHITECTURE.md](ARCHITECTURE.md).
 
-Tests :
+## Serveur de transcription
 
-```bash
-cd src-tauri && cargo test --lib
-# Moteur local sur un vrai modèle (voir ~/.whisper/models ou le dossier de modèles de l'app) :
-MURMURE_TEST_WAV=t.wav cargo test --release --lib engine::local -- --ignored --nocapture
-# (MURMURE_TEST_MODEL=/chemin/ggml-base.bin pour un autre modèle que large-v3-turbo)
-# Client distant contre un serveur réel :
-MURMURE_E2E_URL=http://127.0.0.1:8000 MURMURE_E2E_KEY=mrm_… MURMURE_TEST_WAV=t.wav \
-  cargo test --lib engine::remote -- --ignored --nocapture
-cd server && uv run pytest
-```
+Le dossier [`server/`](server/README.md) contient un serveur compatible avec l'API OpenAI, basé sur
+faster-whisper, prêt à déployer avec Docker sur une machine équipée d'un GPU NVIDIA. Il permet à toute une
+équipe d'utiliser Murmure sur des postes modestes sans que l'audio quitte l'infrastructure.
 
-Mode démo du front : `?reset` relance l'onboarding, `?theme=light`, `?platform=linux`,
-`overlay.html?demo=recording|handsfree|transcribing|error|cycle` pour la pastille.
+## Licence
 
-## Téléchargement et release
+Murmure est un logiciel libre, distribué sous licence
+[GNU AGPL v3 ou ultérieure](LICENSE) (`AGPL-3.0-or-later`). Si vous distribuez une version modifiée, ou si
+vous la proposez comme service en réseau, vous devez publier son code source sous la même licence.
 
-Page publique : **https://crgenerator.s3.eu-west-par.io.cloud.ovh.net/murmure/index.html**
+La variante NVIDIA embarque des bibliothèques CUDA propriétaires : une
+[exception de liaison](LICENSE-EXCEPTION-CUDA.md) autorise leur distribution avec Murmure. Les licences des
+composants tiers sont listées dans [NOTICE](NOTICE).
 
-Liens stables vers la dernière version : `…/murmure/latest/Murmure-macos-arm64.dmg`, `Murmure-macos-x64.dmg`,
-`Murmure-windows-x64-setup.exe`, `Murmure-linux-x64.AppImage` / `.deb` / `.rpm`, `Murmure-linux-x64-cuda.deb` / `.rpm`,
-`Murmure-linux-x64-vulkan.deb` / `.rpm`.
+## Contribuer
 
-Publier une version : `git tag v0.2.0 && git push --tags` (ou Actions › Release › Run workflow). La CI construit
-macOS (Apple Silicon et Intel, signé et notarisé), Windows, Linux (et des variantes CUDA et Vulkan), publie sur S3 et dans une
-release GitHub brouillon, régénère la page et `latest.json` (plus `cuda/latest.json` et `vulkan/latest.json`, pour
-qu'une installation GPU reste sur sa variante) : les apps installées proposent alors la mise à jour.
+Les contributions sont bienvenues. Lisez [CONTRIBUTING.md](CONTRIBUTING.md) : il explique comment
+préparer l'environnement, les vérifications attendues et l'[accord de licence de contribution](CLA.md) à
+accepter dans chaque pull request. La participation au projet suit le
+[code de conduite](CODE_OF_CONDUCT.md).
 
-### Variante Linux Vulkan
+## Sécurité
 
-Accélération GPU par Vulkan : NVIDIA, AMD et Intel, sans CUDA ni bibliothèque embarquée (paquet léger). Seuls
-`libvulkan.so.1` et le pilote ICD du GPU sont requis, présents d'office avec les pilotes NVIDIA et Mesa. Dépendances
-des paquets : `libvulkan1` (.deb), `libvulkan.so.1()(64bit)` (.rpm, satisfaite par `libvulkan1` sur openSUSE et
-`vulkan-loader` sur Fedora). Sans périphérique Vulkan (pas de pilote, ou seulement le pilote logiciel lavapipe que
-whisper.cpp ignore), la transcription se fait sur le processeur. C'est aussi la solution de repli si la variante
-CUDA ne démarre pas. `GGML_VK_VISIBLE_DEVICES=1` choisit un autre GPU (index `vulkaninfo`).
+Pour signaler une faille, utilisez le signalement privé de GitHub, décrit dans [SECURITY.md](SECURITY.md).
+N'ouvrez pas d'issue publique.
 
-Secrets du repo : `APPLE_*` (signature et notarisation), `OVH_S3_ACCESS_KEY` / `OVH_S3_SECRET_KEY`,
-`TAURI_SIGNING_PRIVATE_KEY(_PASSWORD)` (clé des mises à jour, sauvegardée dans `~/.murmure-signing/`).
+## Contact
 
-## Distributions Linux supportées
-
-Plancher : **glibc ≥ 2.34 et webkit2gtk-4.1** (Tauri v2). Les binaires sont construits sur Ubuntu 22.04.
-
-| Famille | Versions testées (installation, lancement, mode CLI) | Paquet |
-|---|---|---|
-| openSUSE | Leap 15.6, Leap 16.0, Tumbleweed | `.rpm` (`zypper install --allow-unsigned-rpm`) |
-| Fedora | 43, 44 | `.rpm` (`dnf install`) |
-| Debian / Ubuntu / Mint | Debian 12, 13 · Ubuntu 22.04, 24.04 · Mint 22 | `.deb` (`apt install ./…`) |
-| Toutes | idem | `.AppImage` (variante standard seulement) |
-
-Exclues faute de webkit2gtk-4.1 ou de glibc 2.34 : Debian 11, Ubuntu 20.04, openSUSE Leap ≤ 15.5, RHEL/Alma 9.
-
-Variante NVIDIA (`-cuda`) : CUDA 12 (cudart, cuBLAS) est livré dans `/usr/lib/murmure/cuda` ; seul le pilote NVIDIA
-propriétaire est requis (≥ 525, CUDA 12 ou 13), cartes Turing (RTX 20) à Blackwell (RTX 50).
-
-Son : la capture passe par ALSA. Sous PulseAudio ou PipeWire, le périphérique « default » doit être routé par
-`alsa-plugins-pulse` (openSUSE), `alsa-plugins-pulseaudio` / `pipewire-alsa` (Fedora) ou `libasound2-plugins` /
-`pipewire-alsa` (Debian) : le paquet les recommande. Si la source par défaut du système est le moniteur d'une
-sortie (HDMI…), l'app le signale ; corriger dans les réglages audio de KDE ou avec `pactl set-default-source`.
-
-## Modèle local
-
-Le modèle s'installe tout seul en arrière-plan au premier lancement (environ 550 Mo, vérifié par SHA256,
-reprise automatique après une coupure). Pour l'installer à l'avance sur un parc de postes, sans fenêtre :
-
-```bash
-murmure --install-model                     # modèle des réglages (par défaut large-v3-turbo-q5_0)
-murmure --install-model small-q5_1          # modèle précis
-MURMURE_DATA_DIR=/chemin murmure --install-model   # dossier de données imposé (tests, CI)
-```
-
-Sous Windows, l'exécutable de release n'a pas de console : la progression ne s'affiche pas, seul le code
-de sortie fait foi.
-
-## Permissions
-
-- **macOS** : Micro, et Accessibilité pour coller dans les autres apps. L'onboarding ouvre les bons panneaux.
-- **Linux X11** : rien de spécial (`xdotool` conseillé).
-- **Linux Wayland** (KDE Plasma ≥ 5.27, GNOME ≥ 48) : Murmure passe par les portails XDG. Au premier lancement
-  (étape « Autoriser Murmure » ou Réglages › Raccourci), le bureau demande **une seule fois** :
-  1. le **raccourci global** (portail GlobalShortcuts) — on peut y choisir une autre touche ; le raccourci attribué
-     s'affiche dans Réglages › Raccourci, « Modifier… » rouvre le réglage du bureau ;
-  2. le **contrôle du clavier** (portail RemoteDesktop) — uniquement pour taper Ctrl+V ; l'accord est mémorisé.
-
-  Collage : portail → `ydotool` (si `ydotoold` tourne) → `wtype` → à défaut le texte est copié et une notification
-  invite à coller avec Ctrl+V. Si le portail des raccourcis est absent ou refusé : liez un raccourci KDE
-  (Configuration du système › Clavier › Raccourcis › Ajouter nouveau › Commande ou script) à `murmure --toggle`.
-  Échap n'annule pas une dictée sous Wayland (pas de capture globale).
-
-  Repli sans portail (bureau trop ancien, autorisation refusée) : KDE (KWin) ne gère pas le protocole de `wtype`,
-  utilisez `ydotool` (accès à `/dev/uinput` + démon utilisateur) :
-
-  ```bash
-  sudo zypper install -y ydotool        # Fedora : sudo dnf install -y ydotool
-  echo 'KERNEL=="uinput", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"' | sudo tee /etc/udev/rules.d/80-uinput.rules
-  echo uinput | sudo tee /etc/modules-load.d/uinput.conf
-  sudo usermod -aG input "$USER"        # puis se déconnecter / reconnecter
-  # Démon côté utilisateur (même socket que le client ; le service système de Fedora tourne en root) :
-  mkdir -p ~/.config/systemd/user && printf '[Unit]\nDescription=ydotoold\n[Service]\nExecStart=/usr/bin/ydotoold\nRestart=always\n[Install]\nWantedBy=default.target\n' > ~/.config/systemd/user/ydotool.service
-  systemctl --user daemon-reload && systemctl --user enable --now ydotool
-  ```
-
-  Autre repli : la session « Plasma (X11) » à l'écran de connexion quand elle existe
-  (openSUSE Leap 16 / Tumbleweed : `sudo zypper install -y plasma6-session-x11`).
-
-## Serveur
-
-Voir [`server/README.md`](server/README.md) : FastAPI + faster-whisper large-v3-turbo, Docker GPU/CPU, Caddy en HTTPS,
-clés `mrm_…` générées par `murmure-server gen-key`.
-
-Architecture et contrat interne : [`ARCHITECTURE.md`](ARCHITECTURE.md).
+Murmure est développé par RD Agency (Rayan Drissi). Pour une question sur le projet, ouvrez une issue ;
+pour un déploiement en entreprise ou une licence commerciale, écrivez à rayan.drissi@icloud.com.

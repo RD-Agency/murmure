@@ -2,6 +2,7 @@
   "name": "murmure",
   "private": true,
   "version": "0.1.4",
+  "license": "AGPL-3.0-or-later",
   "type": "module",
   "scripts": {
     "dev": "vite",

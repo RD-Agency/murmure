@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Limitation de débit simple, en mémoire, par clé (seau à jetons).
 
 Suffisant pour une instance unique ; pour plusieurs réplicas, limiter au niveau du reverse proxy.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Raccourci global : modes maintien (push-to-talk), bascule et hybride.
 //!
 //! La logique de décision ([`HotkeyMachine`]) est pure et testée sans Tauri ;

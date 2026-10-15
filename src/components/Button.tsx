@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { IconLoader } from "./Icons";
 

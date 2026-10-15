@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Prépare la publication S3 d'une release Murmure.
 
 Entrée : le dossier des fichiers d'une version (installeurs + .sig).
@@ -257,8 +258,8 @@ def session_note(distro: str) -> str:
     if distro == "appimage":
         return ("L'AppImage nécessite FUSE 2. S'il ne démarre pas&nbsp;: <code>sudo apt install libfuse2t64</code> "
                 "(Ubuntu 24.04 et plus), <code>libfuse2</code> (Debian, openSUSE) ou <code>fuse-libs</code> (Fedora).")
-    return ("Session Wayland (par défaut sur cette distribution)&nbsp;: déclarez le raccourci dans KDE, "
-            "voir <a href=\"#wayland\">Premiers pas</a>.")
+    return ("Session Wayland (par défaut sur cette distribution)&nbsp;: au premier lancement, cliquez sur "
+            "« Autoriser Murmure », voir <a href=\"#wayland\">Premiers pas</a>.")
 
 
 def linux_panel(avail: dict) -> str:
@@ -565,7 +566,7 @@ footer { margin-top:40px; padding-top:18px; border-top:1px solid var(--line); fo
       <div class="tile"><h3>Annuler</h3><p><kbd>Échap</kbd> annule la dictée en cours, rien n'est écrit.</p></div>
     </div>
     <div class="tile wide"><h3>Ponctuation dictée</h3><p>Dites «&nbsp;virgule&nbsp;», «&nbsp;point&nbsp;», «&nbsp;point à la ligne&nbsp;», «&nbsp;deux-points&nbsp;», «&nbsp;ouvrez les guillemets&nbsp;» / «&nbsp;fermez les guillemets&nbsp;»…</p></div>
-    <div class="tile wide" id="wayland"><h3>Linux sous Wayland (Leap 16, Tumbleweed, Fedora)</h3><p>Le raccourci global n'est pas capté directement. Dans KDE&nbsp;: Configuration du système › Clavier › Raccourcis › <b>Ajouter une commande</b>, saisissez <code>murmure --toggle</code> et attribuez-lui <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Espace</kbd>. Un appui démarre la dictée, un second l'arrête.</p></div>
+    <div class="tile wide" id="wayland"><h3>Linux sous Wayland (Leap 16, Tumbleweed, Fedora)</h3><p>Au premier lancement, cliquez sur <b>Autoriser Murmure</b>. Le bureau (KDE Plasma 5.27 et plus, GNOME 48 et plus) demande une seule fois d'accepter le raccourci global, que vous pouvez changer à ce moment-là, puis le contrôle du clavier, qui sert uniquement à coller le texte.</p><p>Bureau plus ancien ou autorisation refusée&nbsp;: dans KDE, Configuration du système › Clavier › Raccourcis › <b>Ajouter une commande</b>, saisissez <code>murmure --toggle</code> et attribuez-lui <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Espace</kbd>. Un appui démarre la dictée, un second l'arrête.</p></div>
   </section>
 
   <section id="mises-a-jour">

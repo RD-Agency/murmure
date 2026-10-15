@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "../components/Button";
 import { HotkeyRecorder } from "../components/HotkeyRecorder";

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMemo } from "react";
 import { Card } from "../components/Card";
 import { EngineStatus, useEngineReady } from "../components/EngineStatus";

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Ligne de commande : `murmure-server serve` et `murmure-server gen-key`."""
 
 from __future__ import annotations

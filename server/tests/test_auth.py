@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Authentification : absence de clé, mauvaise clé, bonne clé, refus de démarrer sans clé."""
 
 from __future__ import annotations

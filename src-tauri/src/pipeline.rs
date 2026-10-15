@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Flux de dictée : start / stop / cancel / toggle.
 //!
 //! Toutes les commandes passent par une file (`std::sync::mpsc`) consommée par un

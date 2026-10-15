@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Insertion du texte dans l'application active.
 //!
 //! Mode `paste` : sauvegarde du presse-papiers (texte seulement), écriture du texte,

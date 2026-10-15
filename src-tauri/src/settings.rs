@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Réglages persistants de Murmure.
 //!
 //! - `settings.json` dans le dossier de config de l'app (écriture atomique tmp + rename) ;

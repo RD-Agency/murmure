@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 export function Progress({ value, label }: { value: number; label: string }) {
   const pct = Math.max(0, Math.min(1, value)) * 100;
   return (

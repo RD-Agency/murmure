@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Moteurs de transcription : local (whisper.cpp) et serveur (API compatible OpenAI).
 
 pub mod local;

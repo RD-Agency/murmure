@@ -1,0 +1,89 @@
+name: Signaler un bug
+description: Murmure ne fonctionne pas comme prévu.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Merci de prendre le temps de signaler ce problème. Ne collez jamais de clé API ni de texte dicté confidentiel.
+  - type: input
+    id: version
+    attributes:
+      label: Version de Murmure
+      description: Visible dans Réglages › Général.
+      placeholder: "0.1.5"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Système
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Windows
+        - Linux
+    validations:
+      required: true
+  - type: dropdown
+    id: variant
+    attributes:
+      label: Variante installée
+      options:
+        - Standard
+        - NVIDIA (CUDA)
+        - Vulkan
+        - Je ne sais pas
+    validations:
+      required: true
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Moteur de transcription
+      options:
+        - Sur cet appareil
+        - Serveur
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: Ce qui se passe
+      description: Ce que vous faites, ce que vous attendiez, ce qui se produit à la place.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Étapes pour reproduire
+      placeholder: |
+        1. Ouvrir LibreOffice Writer
+        2. Maintenir Ctrl+Alt+Espace et dicter une phrase
+        3. Le texte n'est pas collé
+  - type: textarea
+    id: linux
+    attributes:
+      label: Diagnostic Linux
+      description: |
+        Sous Linux uniquement. Collez la sortie de ces commandes, lancées dans un terminal :
+
+        ```bash
+        cat /etc/os-release | head -4
+        echo "session=$XDG_SESSION_TYPE bureau=$XDG_CURRENT_DESKTOP"
+        rpm -q murmure 2>/dev/null || dpkg -s murmure 2>/dev/null | grep -E '^(Package|Version)'
+        ldd --version | head -1
+        pactl info | grep -E 'Nom du serveur|Server Name|Source par défaut|Default Source'
+        busctl --user tree org.freedesktop.portal.Desktop >/dev/null && echo "portail : présent"
+        systemctl --user is-active ydotool 2>/dev/null; command -v ydotool wtype xdotool
+        nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null
+        vulkaninfo --summary 2>/dev/null | grep -E 'deviceName|driverName'
+        ```
+
+        Puis le journal de l'application : quittez Murmure (icône de la barre de menus, Quitter), relancez-le avec
+        `RUST_LOG=debug murmure 2>&1 | tee murmure.log`, reproduisez le problème et joignez `murmure.log`.
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Autres informations
+      description: Captures d'écran, messages de la pastille, journal sous macOS ou Windows.

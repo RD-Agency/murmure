@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Icône de barre de menus / zone de notification.
 
 use crate::pipeline::{self, Command};

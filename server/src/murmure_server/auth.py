@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Authentification par clé API (`Authorization: Bearer <clé>`) et génération de clés."""
 
 from __future__ import annotations

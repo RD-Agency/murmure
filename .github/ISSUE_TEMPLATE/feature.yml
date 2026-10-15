@@ -1,0 +1,29 @@
+name: Proposer une fonctionnalité
+description: Une idée pour améliorer Murmure.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: Le besoin
+      description: Ce que vous cherchez à faire aujourd'hui, et pourquoi Murmure ne le permet pas ou le fait mal.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: La solution envisagée
+      description: Comment vous imaginez la fonctionnalité, du point de vue de l'utilisateur.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Solutions de contournement
+      description: Ce que vous faites en attendant, ou les autres pistes envisagées.
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Contribution
+      options:
+        - Je peux proposer une pull request
+        - Je peux tester une version de développement
+        - Non
