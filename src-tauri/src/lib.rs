@@ -321,6 +321,16 @@ fn get_platform() -> &'static str {
     }
 }
 
+/// Accélération du moteur local : « Metal · Apple M2 », « Vulkan · NVIDIA GeForce RTX 5050 »,
+/// « CUDA · … » ou « Processeur » (aucun GPU compilé ou présent).
+#[tauri::command]
+async fn get_acceleration() -> CmdResult<String> {
+    // Premier appel : initialise les backends ggml (instance Vulkan, contexte CUDA), hors thread UI.
+    tauri::async_runtime::spawn_blocking(engine::local::acceleration_label)
+        .await
+        .map_err(err_str)
+}
+
 // ───────────────────────────── Mises à jour ──────────────────────────────────
 
 /// Vérifie maintenant ; `None` si l'app est à jour (ou manifeste pas encore publié).
@@ -450,6 +460,7 @@ pub fn run() {
             request_microphone,
             open_permission_settings,
             get_platform,
+            get_acceleration,
             check_update,
             install_update,
         ])

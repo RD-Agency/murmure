@@ -81,6 +81,12 @@ jobs:
             target: x86_64-unknown-linux-gnu
             suffix: linux-x64-cuda
             features: cuda
+          - name: Linux Vulkan
+            # GPU NVIDIA, AMD ou Intel via le pilote graphique : rien d'embarqué, paquet léger.
+            os: '"ubuntu-22.04"'
+            target: x86_64-unknown-linux-gnu
+            suffix: linux-x64-vulkan
+            features: vulkan
           - name: Windows
             os: '"windows-latest"'
             target: x86_64-pc-windows-msvc
@@ -100,7 +106,20 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
-            libasound2-dev libxdo-dev libssl-dev cmake clang rpm
+            libasound2-dev libxdo-dev libssl-dev cmake clang rpm ${{ matrix.features == 'vulkan' && 'libvulkan-dev' || '' }}
+
+      - name: Vulkan SDK (glslc et en-têtes récents ; glslc absent des dépôts Ubuntu 22.04)
+        if: matrix.features == 'vulkan'
+        run: |
+          V=1.4.341.1
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/vulkansdk.tar.xz" \
+            "https://sdk.lunarg.com/sdk/download/$V/linux/vulkansdk-linux-x86_64-$V.tar.xz"
+          tar -xJf "$RUNNER_TEMP/vulkansdk.tar.xz" -C "$RUNNER_TEMP" --wildcards \
+            "$V/x86_64/bin/glslc" "$V/x86_64/include/*" "$V/x86_64/lib/libvulkan.so*"
+          rm "$RUNNER_TEMP/vulkansdk.tar.xz"
+          echo "VULKAN_SDK=$RUNNER_TEMP/$V/x86_64" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/$V/x86_64/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/$V/x86_64/bin/glslc" --version
 
       - name: CUDA toolkit (runner GitHub)
         if: matrix.features == 'cuda' && env.SELF_HOSTED != 'true'
@@ -196,6 +215,25 @@ jobs:
           PY
             cat "$RUNNER_TEMP/cuda.conf.json"
             ARGS+=(--features cuda --bundles deb,rpm --config "$RUNNER_TEMP/cuda.conf.json")
+          elif [ "${{ matrix.features }}" = "vulkan" ]; then
+            # Variante Vulkan : seul libvulkan.so.1 (+ le pilote ICD du GPU) est requis à l'exécution ;
+            # sans périphérique Vulkan, whisper.cpp se replie sur le processeur. Dépendance deb libvulkan1 ;
+            # côté rpm, dépendance par fichier car le paquet change de nom (libvulkan1 sur openSUSE,
+            # vulkan-loader sur Fedora). Pas d'AppImage. Manifeste de mise à jour dédié vulkan/latest.json.
+            python3 - "$PUBLIC_BASE/vulkan/latest.json" > "$RUNNER_TEMP/vulkan.conf.json" <<'PY'
+          import json, sys
+          linux = json.load(open("src-tauri/tauri.conf.json"))["bundle"].get("linux", {})
+          deps = lambda fmt: linux.get(fmt, {}).get("depends", [])
+          print(json.dumps({
+              "bundle": {"linux": {
+                  "deb": {"depends": deps("deb") + ["libvulkan1"]},
+                  "rpm": {"depends": deps("rpm") + ["libvulkan.so.1()(64bit)"]},
+              }},
+              "plugins": {"updater": {"endpoints": [sys.argv[1]]}},
+          }))
+          PY
+            cat "$RUNNER_TEMP/vulkan.conf.json"
+            ARGS+=(--features vulkan --bundles deb,rpm --config "$RUNNER_TEMP/vulkan.conf.json")
           fi
           pnpm tauri build "${ARGS[@]}"
 
@@ -266,7 +304,11 @@ jobs:
             s3 "dl/$src" "s3://$S3_BUCKET/$S3_PREFIX/latest/$dst"
           done < site/latest-map.txt
           s3 site/latest.json "s3://$S3_BUCKET/$S3_PREFIX/latest.json" --cache-control "no-cache" --content-type application/json
-          [ -f site/cuda/latest.json ] && s3 site/cuda/latest.json "s3://$S3_BUCKET/$S3_PREFIX/cuda/latest.json" --cache-control "no-cache" --content-type application/json
+          for v in cuda vulkan; do
+            if [ -f "site/$v/latest.json" ]; then
+              s3 "site/$v/latest.json" "s3://$S3_BUCKET/$S3_PREFIX/$v/latest.json" --cache-control "no-cache" --content-type application/json
+            fi
+          done
           s3 site/index.html  "s3://$S3_BUCKET/$S3_PREFIX/index.html"  --cache-control "no-cache" --content-type "text/html; charset=utf-8"
           s3 site/icon.png    "s3://$S3_BUCKET/$S3_PREFIX/icon.png"
 

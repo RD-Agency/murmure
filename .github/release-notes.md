@@ -9,6 +9,7 @@
 | Linux Fedora / openSUSE | `Murmure-…-linux-x64.rpm` |
 | Linux, toute distribution | `Murmure-…-linux-x64.AppImage` |
 | Linux avec carte NVIDIA | variantes `…-linux-x64-cuda.*` (.rpm ou .deb ; seul le pilote NVIDIA est requis, CUDA est inclus) |
+| Linux, carte graphique NVIDIA, AMD ou Intel (Vulkan) | variantes `…-linux-x64-vulkan.*` (.rpm ou .deb, paquet léger ; seul le pilote graphique est requis) — aussi la solution de repli si la version NVIDIA ne démarre pas |
 
 Au premier lancement, Murmure télécharge seul le modèle Whisper large-v3-turbo (~550 Mo), puis tout fonctionne hors ligne.
 Pour un déploiement en parc : `murmure --install-model` installe le modèle avant le premier lancement.

@@ -138,6 +138,7 @@ export interface CommandMap {
   request_microphone: { args: undefined; ret: Permissions };
   open_permission_settings: { args: { kind: PermissionKind }; ret: void };
   get_platform: { args: undefined; ret: Platform };
+  get_acceleration: { args: undefined; ret: string };
   check_update: { args: undefined; ret: UpdateInfo | null };
   install_update: { args: undefined; ret: void };
 }

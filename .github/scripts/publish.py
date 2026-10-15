@@ -16,10 +16,10 @@ import shutil
 from pathlib import Path
 
 # Variantes et formats publiés (copies stables latest/Murmure-<variante><ext>).
-VARIANTS = ["macos-arm64", "macos-x64", "windows-x64", "linux-x64", "linux-x64-cuda"]
+VARIANTS = ["macos-arm64", "macos-x64", "windows-x64", "linux-x64", "linux-x64-cuda", "linux-x64-vulkan"]
 FORMATS = [".dmg", "-setup.exe", ".msi", ".AppImage", ".deb", ".rpm"]
-# Clés du manifeste Tauri v2 → (variante, extension). La variante CUDA est exclue :
-# la clé linux-x86_64 la ferait « mettre à jour » vers la version sans GPU.
+# Clés du manifeste Tauri v2 → (variante, extension). Les variantes CUDA et Vulkan sont exclues :
+# la clé linux-x86_64 les ferait « mettre à jour » vers la version sans GPU.
 UPDATER = {
     "darwin-aarch64": ("macos-arm64", ".app.tar.gz"),
     "darwin-x86_64": ("macos-x64", ".app.tar.gz"),
@@ -36,6 +36,12 @@ UPDATER_CUDA = {
     "linux-x86_64": ("linux-x64-cuda", ".rpm"),
     "linux-x86_64-deb": ("linux-x64-cuda", ".deb"),
     "linux-x86_64-rpm": ("linux-x64-cuda", ".rpm"),
+}
+# Idem pour la variante Vulkan (vulkan/latest.json).
+UPDATER_VULKAN = {
+    "linux-x86_64": ("linux-x64-vulkan", ".rpm"),
+    "linux-x86_64-deb": ("linux-x64-vulkan", ".deb"),
+    "linux-x86_64-rpm": ("linux-x64-vulkan", ".rpm"),
 }
 
 
@@ -75,10 +81,11 @@ def main() -> None:
         }
 
     (out / "latest.json").write_text(json.dumps(manifest(UPDATER), indent=2, ensure_ascii=False))
-    cuda = manifest(UPDATER_CUDA)
-    if cuda["platforms"]:
-        (out / "cuda").mkdir(exist_ok=True)
-        (out / "cuda" / "latest.json").write_text(json.dumps(cuda, indent=2, ensure_ascii=False))
+    for sub, mapping in (("cuda", UPDATER_CUDA), ("vulkan", UPDATER_VULKAN)):
+        m = manifest(mapping)
+        if m["platforms"]:
+            (out / sub).mkdir(exist_ok=True)
+            (out / sub / "latest.json").write_text(json.dumps(m, indent=2, ensure_ascii=False))
 
     # Copies stables : (variante, extension) → Fichier.
     latest_map, avail = [], {}
@@ -221,6 +228,29 @@ def nvidia_note(distro: str) -> str:
     return base + extra.get(distro, "")
 
 
+def vulkan_note(distro: str) -> str:
+    base = ("Accélération par la carte graphique via <b>Vulkan</b>&nbsp;: cartes NVIDIA, AMD et Intel. "
+            "Rien à installer en plus du pilote graphique habituel (NVIDIA ou Mesa). "
+            "Sans pilote Vulkan, Murmure fonctionne quand même, sur le processeur.")
+    extra = {
+        "leap15": " Vérifier&nbsp;: <code>sudo zypper install vulkan-tools</code> puis <code>vulkaninfo --summary</code>.",
+        "leap16": " Vérifier&nbsp;: <code>sudo zypper install vulkan-tools</code> puis <code>vulkaninfo --summary</code>.",
+        "fedora": " Vérifier&nbsp;: <code>sudo dnf install vulkan-tools</code> puis <code>vulkaninfo --summary</code>. Carte AMD ou Intel&nbsp;: pilote <code>mesa-vulkan-drivers</code>.",
+        "debian": " Vérifier&nbsp;: <code>sudo apt install vulkan-tools</code> puis <code>vulkaninfo --summary</code>. Carte AMD ou Intel&nbsp;: pilote <code>mesa-vulkan-drivers</code>.",
+    }
+    return base + extra.get(distro, "")
+
+
+# Choix « carte graphique » : (mode, variante, libellé de la puce, titre sans JavaScript).
+GPU_MODES = [
+    ("nvidia", "linux-x64-cuda", "Carte NVIDIA", "carte NVIDIA"),
+    ("vulkan", "linux-x64-vulkan", "Carte graphique (Vulkan) — si la version NVIDIA ne marche pas, ou carte AMD/Intel",
+     "carte graphique (Vulkan)"),
+    ("std", "linux-x64", "Sans carte graphique / je ne sais pas", "sans carte graphique"),
+]
+VARIANT_LABEL = {"linux-x64": "standard", "linux-x64-cuda": "NVIDIA", "linux-x64-vulkan": "Vulkan"}
+
+
 def session_note(distro: str) -> str:
     if distro == "leap15":
         return "Session X11 (par défaut sur Leap 15.6)&nbsp;: le raccourci <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Espace</kbd> fonctionne directement."
@@ -232,40 +262,47 @@ def session_note(distro: str) -> str:
 
 
 def linux_panel(avail: dict) -> str:
+    modes = [m for m in GPU_MODES if m[0] == "std" or any((m[1], ext) in avail for *_, ext in DISTROS)]
     distros, combos = [], []
     for did, label, logos, ext in DISTROS:
-        std, gpu = avail.get(("linux-x64", ext)), avail.get(("linux-x64-cuda", ext))
-        if not std and not gpu:
+        std = avail.get(("linux-x64", ext))
+        if not any(avail.get((variant, ext)) for _, variant, *_ in modes):
             continue
         distros.append(
             f'<button type="button" class="chip" data-distro="{did}" aria-pressed="false">'
             f'{"".join(logo(k, 18) for k in logos)}<span>{e(label)}</span></button>')
-        for mode in ("nvidia", "std"):
-            f = gpu if (mode == "nvidia" and gpu) else std or gpu
+        for mode, variant, _, title in modes:
+            own = avail.get((variant, ext))
+            f = own or std or next(avail[(v, ext)] for _, v, *_ in modes if (v, ext) in avail)
             warn, notes = [], []
-            if mode == "nvidia" and not gpu:
-                warn.append("La version NVIDIA n'existe pas au format "
-                             f"{'AppImage' if ext == '.AppImage' else ext} pour cette version&nbsp;: "
-                             "la version standard ci-dessous fonctionne aussi, la transcription "
-                             "se fait alors sur le processeur (plus lentement)."
-                             + (" Pour profiter de la carte NVIDIA, choisissez plutôt votre distribution "
-                                "ci-dessus (paquet .rpm ou .deb)." if ext == ".AppImage" else ""))
+            if mode != "std" and not own:
+                warn.append(f"La version {VARIANT_LABEL[variant]} n'existe pas au format "
+                            f"{'AppImage' if ext == '.AppImage' else ext} pour cette version&nbsp;: "
+                            "la version standard ci-dessous fonctionne aussi, la transcription "
+                            "se fait alors sur le processeur (plus lentement)."
+                            + (" Pour profiter de la carte graphique, choisissez plutôt votre distribution "
+                               "ci-dessus (paquet .rpm ou .deb)." if ext == ".AppImage" else ""))
             elif mode == "nvidia":
                 notes.append(nvidia_note(did))
+            elif mode == "vulkan":
+                notes.append(vulkan_note(did))
             if mode == "std" and not std:
-                warn.append("Seule la version NVIDIA est disponible pour cette version.")
+                warn.append("Seule une version pour carte graphique est disponible pour cette version.")
             notes.append(session_note(did))
-            variant = "NVIDIA" if f is gpu else "standard"
+            shown = next(VARIANT_LABEL[v] for v in VARIANT_LABEL if avail.get((v, ext)) is f)
             combos.append(
                 f'<div class="combo" data-distro="{did}" data-gpu="{mode}">'
-                f'<h4 class="combo-title">{e(label)} · {"carte NVIDIA" if mode == "nvidia" else "sans carte NVIDIA"}</h4>'
+                f'<h4 class="combo-title">{e(label)} · {e(title)}</h4>'
                 + "".join(f'<p class="note warn">{n}</p>' for n in warn)
-                + code_block(linux_commands(did, f), f"Terminal · version {variant}")
+                + code_block(linux_commands(did, f), f"Terminal · version {shown}")
                 + f'<p class="file">Fichier&nbsp;: <a href="{e(f.url)}">{e(f.nom)}</a> · {human(f.taille)}</p>'
                 + "".join(f'<p class="note">{n}</p>' for n in notes)
                 + "</div>")
     if not distros:
         return ""
+    gpu_chips = "".join(
+        f'<button type="button" class="chip" data-gpu="{mode}" aria-pressed="false"><span>{e(chip)}</span></button>'
+        for mode, _, chip, _ in modes)
     return f"""
 <div class="panel" id="p-linux" data-os="linux">
   <ol class="steps">
@@ -273,10 +310,7 @@ def linux_panel(avail: dict) -> str:
       <div class="chips" role="group" aria-label="Distribution">{"".join(distros)}</div>
       <p class="hint">Pour la connaître&nbsp;: <code>grep PRETTY_NAME /etc/os-release</code></p></li>
     <li><span class="step-t">Votre carte graphique</span>
-      <div class="chips" role="group" aria-label="Carte graphique">
-        <button type="button" class="chip" data-gpu="nvidia" aria-pressed="false"><span>Carte NVIDIA</span></button>
-        <button type="button" class="chip" data-gpu="std" aria-pressed="false"><span>Sans carte NVIDIA / je ne sais pas</span></button>
-      </div><p class="hint" id="gpu-hint"></p></li>
+      <div class="chips" role="group" aria-label="Carte graphique">{gpu_chips}</div><p class="hint" id="gpu-hint"></p></li>
     <li><span class="step-t">Copiez le bloc, collez-le dans un terminal (Konsole&nbsp;: <kbd>Ctrl</kbd>+<kbd>Maj</kbd>+<kbd>V</kbd>), appuyez sur <kbd>Entrée</kbd></span>
       {"".join(combos)}
     </li>
@@ -334,9 +368,11 @@ def render_page(version: str, date: dt.date, avail: dict, listing: list, sums) -
     diag = [
         ("La carte NVIDIA et son pilote sont-ils reconnus ?", ["nvidia-smi | head -5"]),
         ("La version NVIDIA de Murmure est-elle installée ? (liste les bibliothèques CUDA)", ["ls /usr/lib/murmure/cuda"]),
+        ("Version Vulkan : la carte est-elle visible en Vulkan ? (paquet vulkan-tools)", ["vulkaninfo --summary | grep -E 'deviceName|driverName'"]),
         ("Type de session : x11 ou wayland ?", ["echo $XDG_SESSION_TYPE"]),
         ("Relancer Murmure en gardant un journal (reproduisez le problème, puis quittez Murmure)",
          ["pkill -x murmure; murmure 2>&1 | tee /tmp/murmure.log"]),
+        ("Accélération utilisée par Murmure (Vulkan, CUDA ou processeur), d'après ce journal", ["grep -a 'Accélération' /tmp/murmure.log"]),
         ("Afficher les 20 dernières lignes du journal, à envoyer au support", ["tail -20 /tmp/murmure.log"]),
     ]
     diag_html = "".join(f'<p class="diag-t">{e(t)}</p>{code_block(c, "Terminal")}' for t, c in diag)
@@ -580,12 +616,13 @@ footer { margin-top:40px; padding-top:18px; border-top:1px solid var(--line); fo
   var mobile = /Android|iPhone|iPad|iPod/i.test(ua) || (uad && uad.mobile);
   var os = mobile ? null : /Win/i.test(plat + ua) ? "windows" : /Mac/i.test(plat + ua) ? "macos" : /Linux|X11|CrOS/i.test(plat + ua) ? "linux" : null;
   var distro = /Fedora/i.test(ua) ? "fedora" : /Ubuntu|Debian|Mint/i.test(ua) ? "debian" : "leap15";
-  var gpu = "std", gpuSeen = false;
+  var gpu = "std", gpuSeen = "";
   try {
     var gl = d.createElement("canvas").getContext("webgl");
     var ext = gl && gl.getExtension("WEBGL_debug_renderer_info");
     var r = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl ? gl.getParameter(gl.RENDERER) : "";
-    if (/nvidia|geforce|rtx|quadro/i.test(r)) { gpu = "nvidia"; gpuSeen = true; }
+    if (/nvidia|geforce|rtx|quadro/i.test(r)) { gpu = "nvidia"; gpuSeen = "NVIDIA"; }
+    else if (/radeon|amd|intel.*arc/i.test(r) && has('.chip[data-gpu="vulkan"]')) { gpu = "vulkan"; gpuSeen = /intel/i.test(r) ? "Intel Arc" : "AMD"; }
   } catch (e) {}
 
   // Lien partagé : #linux/fedora/nvidia
@@ -593,7 +630,7 @@ footer { margin-top:40px; padding-top:18px; border-top:1px solid var(--line); fo
   var h = location.hash.slice(1).split("/");
   if (NAMES[h[0]] && has('.tab[data-os="' + h[0] + '"]')) os = h[0];
   if (h[1] && has('.chip[data-distro="' + h[1] + '"]')) distro = h[1];
-  if (h[2] === "nvidia" || h[2] === "std") gpu = h[2];
+  if (h[2] && has('.chip[data-gpu="' + h[2] + '"]')) gpu = h[2];
 
   var firstTab = d.querySelector(".tab");
   state.os = os && has('.tab[data-os="' + os + '"]') ? os : firstTab && firstTab.dataset.os;
@@ -605,7 +642,7 @@ footer { margin-top:40px; padding-top:18px; border-top:1px solid var(--line); fo
   if (det) det.textContent = detected && detected === state.os ? "Système détecté : " + NAMES[detected] + ". Pas le bon ? Choisissez un autre onglet."
     : mobile ? "Ouvrez cette page sur l'ordinateur à équiper, ou choisissez son système ci-dessous." : "Choisissez votre système.";
   var gh = d.getElementById("gpu-hint");
-  if (gh) gh.textContent = gpuSeen ? "Carte NVIDIA détectée sur cet ordinateur." : "Pour vérifier : la commande nvidia-smi affiche le nom de la carte si elle est présente.";
+  if (gh) gh.textContent = gpuSeen ? "Carte " + gpuSeen + " détectée sur cet ordinateur." : "Pour vérifier : la commande lspci | grep -i vga affiche le nom de la carte graphique.";
 
   // Mac : le premier bouton est mis en avant ; Intel passe en tête si détecté.
   function markMac() {

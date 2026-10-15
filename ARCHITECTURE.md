@@ -3,7 +3,9 @@
 Murmure est une app de dictée vocale façon Wispr Flow : on maintient un raccourci, on parle,
 on relâche, le texte apparaît dans l'application active. Deux moteurs :
 
-- **Local** : Whisper large-v3-turbo via whisper.cpp (`whisper-rs`), Metal sur macOS, CUDA en option (`--features cuda`).
+- **Local** : Whisper large-v3-turbo via whisper.cpp (`whisper-rs`), Metal sur macOS, CUDA (`--features cuda`) ou
+  Vulkan (`--features vulkan`) en option, exclusifs. Accélérateur détecté à l'exécution (`engine::local::acceleration`,
+  premier périphérique ggml de type GPU, même règle que whisper.cpp) : beam search 5 sur GPU, greedy sur CPU.
 - **Serveur** : n'importe quel endpoint compatible OpenAI `POST /v1/audio/transcriptions`
   (notre serveur `server/` à base de faster-whisper, ou OpenAI / Groq), authentifié par clé API (Bearer).
 
@@ -88,6 +90,7 @@ Noms snake_case côté Rust, arguments camelCase côté JS (convention Tauri). E
 | `request_microphone` | — | `Permissions` |
 | `open_permission_settings` | `kind: "microphone" \| "accessibility"` | `()` |
 | `get_platform` | — | `"macos" \| "linux" \| "windows"` |
+| `get_acceleration` | — | `string` : « Metal · Apple M2 », « Vulkan · NVIDIA GeForce RTX 5050 », « CUDA · … » ou « Processeur » |
 | `check_update` | — | `UpdateInfo \| null` : `null` si à jour ou manifeste absent (404) ; erreur si réseau injoignable. Toujours `null` en dev |
 | `install_update` | — | `()` : télécharge (`update-progress`), installe puis relance l'app (ne rend pas la main en cas de succès). Refusé pendant une dictée |
 
@@ -208,6 +211,12 @@ pub fn encode_wav(samples: &[f32]) -> Vec<u8>;                     // PCM 16 bit
   (`libcudart`, `libcublas`, `libcublasLt`) sont livrées dans `/usr/lib/murmure/cuda` (rpath posé par `build.rs`),
   seul le pilote NVIDIA est requis (CUDA 12 ou 13). Manifeste de mise à jour dédié `cuda/latest.json` pour ne
   jamais basculer vers la version sans GPU.
+- Variante Linux Vulkan (`--features vulkan`, paquets `…-linux-x64-vulkan.deb/.rpm`, pas d'AppImage) : rien
+  d'embarqué, dépendance `libvulkan1` (.deb) / `libvulkan.so.1()(64bit)` (.rpm, nom de paquet variable selon la
+  distribution). Build : `libvulkan-dev` + `glslc` et en-têtes du SDK LunarG (`VULKAN_SDK`, glslc absent d'Ubuntu
+  22.04). Exécution : sans ICD Vulkan, l'instance échoue proprement (`ggml_backend_vk_reg` → nullptr) ; un pilote
+  logiciel seul (lavapipe, type CPU) est ignoré par ggml ; dans les deux cas repli CPU (log `warn`). Loader Vulkan
+  < 1.2 : abandon de ggml (aucune distribution cible concernée). Manifeste dédié `vulkan/latest.json`.
 - Linux .deb / .rpm : l'installation exige root, la mise à jour est seulement annoncée (`update-available`,
   bouton « Installer »). L'AppImage (variable `APPIMAGE`) est mise à jour en silence.
 - Manifeste absent (404), plateforme absente, réseau coupé : log debug uniquement (les logs `error` du plugin

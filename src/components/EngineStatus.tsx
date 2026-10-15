@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+import { api } from "../lib/api";
 import { downloadPercent, hostOf } from "../lib/format";
 import { useApp } from "../store";
 import { StatusDot } from "./Badge";
@@ -13,6 +15,18 @@ export function EngineStatus() {
   const setView = useApp((s) => s.setView);
 
   const local = settings.engine === "local";
+  const [acceleration, setAcceleration] = useState<string | null>(null);
+  useEffect(() => {
+    if (!local) return;
+    let alive = true;
+    api
+      .getAcceleration()
+      .then((a) => alive && setAcceleration(a))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [local]);
   const model = models.find((m) => m.id === settings.local_model);
   const downloading = model ? downloads[model.id] : undefined;
 
@@ -48,7 +62,9 @@ export function EngineStatus() {
       </div>
       <div className="min-w-0 flex-1">
         <div className="truncate text-[13px] font-medium text-fg">{detail}</div>
-        <div className="text-[12px] text-subtle">{local ? "Sur cet appareil" : "Serveur"}</div>
+        <div className="truncate text-[12px] text-subtle" title={acceleration ?? undefined}>
+          {local ? (acceleration ? `Sur cet appareil · Accélération : ${acceleration}` : "Sur cet appareil") : "Serveur"}
+        </div>
       </div>
       <div className="flex shrink-0 items-center gap-2 text-[12.5px] text-muted">
         <StatusDot tone={tone} />
