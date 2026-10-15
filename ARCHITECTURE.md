@@ -215,6 +215,18 @@ pub fn encode_wav(samples: &[f32]) -> Vec<u8>;                     // PCM 16 bit
 - Mode démo navigateur : `?update` simule une 0.2.0 disponible, `?update=ready` une 0.2.0 prête, `?update=error`
   un serveur injoignable.
 
+## Ponctuation dictée (`punctuation.rs`)
+
+- Réglage `spoken_punctuation` (défaut : activé), actif si la langue est `fr` ou `auto` : « virgule », « point »,
+  « point à la ligne », « à la ligne », « nouveau paragraphe », « deux points », « point-virgule », « point
+  d'interrogation / d'exclamation », « points de suspension », « ouvrez / fermez les guillemets » (« »),
+  « ouvrez / fermez la parenthèse » deviennent les signes ; typographie française et majuscules recomposées.
+- Garde-fous : « point » seul n'est converti qu'en fin de phrase ou isolé par Whisper entre deux signes, jamais
+  après un déterminant (« caler un point jeudi », « le point de vue ») ; idem « virgule », « deux points ».
+- Langue fixée sur `fr` : un exemple de dictée ponctuée (`PROMPT_FR`) est ajouté au prompt initial de Whisper,
+  sans quoi « deux points » devient « 2. » et « à la ligne » est mal reconnu. Mesure sur corpus :
+  `MURMURE_PUNCT_DIR=… cargo test --release --lib engine::local::tests::corpus_ponctuation -- --ignored --nocapture`.
+
 ## Flux de dictée
 
 ```

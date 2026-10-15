@@ -44,6 +44,8 @@ pub struct Settings {
     pub local_model: String,
     pub language: String,
     pub initial_prompt: String,
+    /// « virgule », « point à la ligne »… convertis en signes (français).
+    pub spoken_punctuation: bool,
     pub remote_endpoint: String,
     pub remote_model: String,
     pub hotkey: String,
@@ -74,6 +76,7 @@ impl Default for Settings {
             local_model: "large-v3-turbo-q5_0".into(),
             language: "fr".into(),
             initial_prompt: String::new(),
+            spoken_punctuation: true,
             remote_endpoint: String::new(),
             remote_model: "whisper-large-v3-turbo".into(),
             hotkey: default_hotkey().into(),

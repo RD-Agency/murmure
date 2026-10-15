@@ -198,4 +198,28 @@ mod tests {
 
         assert!(warm.to_lowercase().contains("bonjour"), "transcription inattendue : {warm}");
     }
+
+    /// Corpus de dictées (ponctuation prononcée ou naturelle) :
+    /// `MURMURE_PUNCT_DIR=/dossier/des/wav cargo test --release --lib engine::local::tests::corpus_ponctuation -- --ignored --nocapture`
+    #[test]
+    #[ignore = "nécessite ~/.whisper/models/ggml-large-v3-turbo.bin et un dossier de WAV"]
+    fn corpus_ponctuation() {
+        let model = dirs::home_dir().unwrap().join(".whisper/models/ggml-large-v3-turbo.bin");
+        let dir = std::env::var("MURMURE_PUNCT_DIR").expect("MURMURE_PUNCT_DIR");
+        let mut wavs: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|e| e == "wav"))
+            .collect();
+        wavs.sort();
+        let engine = LocalEngine::load(&model).unwrap();
+        let prompt = std::env::var("MURMURE_PUNCT_PROMPT").ok();
+        let opts = TranscribeOptions { language: Some("fr".into()), initial_prompt: prompt };
+        for wav in wavs {
+            let raw = engine.transcribe(&read_wav(&wav), &opts).unwrap();
+            println!("{} brut  : {raw}", wav.file_name().unwrap().to_string_lossy());
+            let name = wav.file_name().unwrap().to_string_lossy().into_owned();
+            println!("{name} final : {}", crate::punctuation::apply_fr(&raw).replace('\n', "⏎"));
+        }
+    }
 }

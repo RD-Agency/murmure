@@ -14,6 +14,7 @@ pub mod permissions;
 pub mod pipeline;
 pub mod state;
 pub mod tray;
+pub mod punctuation;
 pub mod updater;
 
 use crate::engine::RemoteEngine;

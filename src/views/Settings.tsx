@@ -97,6 +97,20 @@ export function Settings() {
                   ))}
                 </Select>
               </Row>
+              {(settings.language === "fr" || settings.language === "auto") && (
+                <Row
+                  label="Ponctuation dictée"
+                  htmlFor="spoken-punctuation"
+                  description="Dites « virgule », « point », « point à la ligne », « deux points », « ouvrez les guillemets »… : Murmure écrit le signe."
+                >
+                  <Switch
+                    id="spoken-punctuation"
+                    label="Ponctuation dictée"
+                    checked={settings.spoken_punctuation}
+                    onChange={(spoken_punctuation) => update({ spoken_punctuation })}
+                  />
+                </Row>
+              )}
               <div className="px-4 py-3.5">
                 <label htmlFor="initial-prompt" className="flex items-center gap-1.5 text-[13px] font-medium text-fg">
                   <IconBook size={14} className="text-subtle" /> Vocabulaire

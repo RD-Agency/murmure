@@ -23,6 +23,7 @@ const DEFAULT_SETTINGS: Settings = {
   local_model: "large-v3-turbo-q5_0",
   language: "fr",
   initial_prompt: "",
+  spoken_punctuation: true,
   remote_endpoint: "",
   remote_model: "whisper-large-v3-turbo",
   hotkey: "Alt+Space",

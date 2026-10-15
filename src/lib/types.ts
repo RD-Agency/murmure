@@ -12,6 +12,8 @@ export interface Settings {
   /** "auto" ou code ISO 639-1 */
   language: string;
   initial_prompt: string;
+  /** « virgule », « point à la ligne »… convertis en signes (français) */
+  spoken_punctuation: boolean;
   remote_endpoint: string;
   remote_model: string;
   /** Format accelerator Tauri, ex. "Alt+Space" */

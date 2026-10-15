@@ -330,12 +330,14 @@ async fn transcribe_and_deliver(
     duration_ms: u64,
 ) {
     let state = app.state::<AppState>();
+    let spoken_punctuation = settings.spoken_punctuation && matches!(settings.language.trim(), "fr" | "auto" | "");
     let opts = TranscribeOptions {
         language: match settings.language.trim() {
             "" | "auto" => None,
             l => Some(l.to_string()),
         },
-        initial_prompt: Some(settings.initial_prompt.trim().to_string()).filter(|p| !p.is_empty()),
+        // Vocabulaire des commandes seulement en français fixé : en détection auto, il biaiserait la langue.
+        initial_prompt: initial_prompt(&settings.initial_prompt, spoken_punctuation && settings.language.trim() == "fr"),
     };
     let t0 = Instant::now();
     let (result, model) = match settings.engine {
@@ -371,6 +373,7 @@ async fn transcribe_and_deliver(
         return;
     }
     let text = match result {
+        Ok(t) if spoken_punctuation => crate::punctuation::apply_fr(&clean_text(&t)),
         Ok(t) => clean_text(&t),
         Err(msg) => {
             fail(&app, &msg);
@@ -443,6 +446,18 @@ pub fn ensure_local_engine(app: &AppHandle, model_id: &str) -> Result<Arc<LocalE
 }
 
 /// Normalise le texte transcrit : espaces superflus, pas d'espace en tête ni en fin.
+/// Prompt initial de Whisper : vocabulaire de l'utilisateur, plus les commandes de ponctuation dictée.
+fn initial_prompt(vocabulary: &str, spoken_punctuation: bool) -> Option<String> {
+    let vocabulary = vocabulary.trim();
+    let prompt = match (vocabulary.is_empty(), spoken_punctuation) {
+        (true, false) => return None,
+        (true, true) => crate::punctuation::PROMPT_FR.to_string(),
+        (false, false) => vocabulary.to_string(),
+        (false, true) => format!("{vocabulary} {}", crate::punctuation::PROMPT_FR),
+    };
+    Some(prompt)
+}
+
 pub fn clean_text(raw: &str) -> String {
     raw.split_whitespace().collect::<Vec<_>>().join(" ")
 }
