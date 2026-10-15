@@ -52,7 +52,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 cpal = "0.15"
 hound = "3.5"
 rubato = "0.16"
-whisper-rs = { version = "0.15", features = ["raw-api"] }
+whisper-rs = { version = "0.15", features = ["raw-api", "log_backend"] }
 arboard = "3"
 enigo = "0.5"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
@@ -68,7 +68,7 @@ ashpd = { version = "0.13", default-features = false, features = ["tokio", "glob
 arboard = { version = "3", features = ["wayland-data-control"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-whisper-rs = { version = "0.15", features = ["metal", "raw-api"] }
+whisper-rs = { version = "0.15", features = ["metal", "raw-api", "log_backend"] }
 # Permissions (AVFoundation) et réglages fins de la fenêtre overlay (NSWindow)
 objc2 = "0.6"
 block2 = "0.6"

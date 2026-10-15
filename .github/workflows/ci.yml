@@ -19,6 +19,10 @@ jobs:
       matrix:
         os: [macos-latest, ubuntu-22.04, windows-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      # Comme en release : build portable de ggml (x86-64-v3 en x86), vérifié par
+      # engine::local::tests::build_portable_en_x86_64_v3.
+      SOURCE_DATE_EPOCH: "1700000000"
     steps:
       - uses: actions/checkout@v5
       - name: Dépendances système (Linux)
@@ -38,11 +42,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          # whisper-rs-sys ne se recompile pas quand la configuration CMake change : nouveau cache.
+          key: ggml-${{ hashFiles('src-tauri/cmake/**', 'src-tauri/.cargo/config.toml') }}
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - name: cargo test
         working-directory: src-tauri
-        run: cargo test --lib
+        run: cargo test --lib -- --show-output
 
   vulkan:
     # Variante Linux Vulkan : vérifie que whisper.cpp (shaders compris) compile et que les tests passent.
@@ -78,7 +84,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-          key: vulkan
+          key: vulkan-${{ hashFiles('src-tauri/cmake/**', 'src-tauri/.cargo/config.toml') }}
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - name: cargo clippy + test (sans GPU, repli processeur)

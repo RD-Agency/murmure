@@ -26,11 +26,63 @@ fn default_strategy(gpu: bool) -> SamplingStrategy {
     }
 }
 
+/// Threads de calcul selon le nombre de threads logiques. Mesuré sur Ryzen 9 5950X (16 cœurs,
+/// 32 threads, large-v3-turbo q5_0, AVX2) : 4 → 27 s, 8 → 18 s, 16 → 14 s, 24 → 11 s, 32 → 75 s.
+/// Au-delà des cœurs physiques, le pool de ggml (attente active) s'effondre dès qu'un autre
+/// processus prend du temps processeur : jusqu'à 16 threads logiques on garde min(n, 8), au-delà
+/// la moitié (≈ cœurs physiques), plafonnée à 16.
+fn default_threads(logical: usize) -> i32 {
+    logical.clamp(1, 8).max((logical / 2).min(16)) as i32
+}
+
+/// Instructions x86 avec lesquelles ggml a été compilé mais que ce processeur n'a pas.
+///
+/// Les binaires publiés visent x86-64-v3 (AVX2, FMA, F16C : `cmake/ggml-x86-64-v3.cmake`). Sur un
+/// processeur plus ancien, le moindre appel ggml finirait en « illegal instruction » : à vérifier
+/// avant tout appel à whisper.cpp/ggml. Seules les fonctions `ggml_cpu_has_*` sont appelées ici :
+/// elles renvoient une constante fixée à la compilation, sans instruction SIMD.
+fn missing_cpu_features() -> Vec<&'static str> {
+    #[cfg(target_arch = "x86_64")]
+    {
+        use whisper_rs::whisper_rs_sys as sys;
+        // SAFETY : fonctions C sans argument ni état, qui renvoient un drapeau de compilation.
+        let compiled = unsafe {
+            [
+                ("AVX", sys::ggml_cpu_has_avx(), std::arch::is_x86_feature_detected!("avx")),
+                ("AVX2", sys::ggml_cpu_has_avx2(), std::arch::is_x86_feature_detected!("avx2")),
+                ("FMA", sys::ggml_cpu_has_fma(), std::arch::is_x86_feature_detected!("fma")),
+                ("F16C", sys::ggml_cpu_has_f16c(), std::arch::is_x86_feature_detected!("f16c")),
+                ("BMI2", sys::ggml_cpu_has_bmi2(), std::arch::is_x86_feature_detected!("bmi2")),
+                ("AVX512", sys::ggml_cpu_has_avx512(), std::arch::is_x86_feature_detected!("avx512f")),
+            ]
+        };
+        compiled.into_iter().filter(|&(_, built, present)| built != 0 && !present).map(|(name, ..)| name).collect()
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    Vec::new()
+}
+
+/// Erreur si ce processeur ne peut pas exécuter le moteur local tel que compilé.
+pub fn cpu_check() -> anyhow::Result<()> {
+    let missing = missing_cpu_features();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "Ce processeur ne dispose pas des instructions {} requises par le moteur local \
+         (processeur ancien ou d'entrée de gamme). Utilisez le moteur « Serveur ».",
+        missing.join(", ")
+    )
+}
+
 /// Accélérateur que whisper.cpp retiendra (même règle que `whisper_backend_init_gpu` : premier
 /// périphérique ggml de type GPU), ex. `("Vulkan", "NVIDIA GeForce RTX 5050")`. `None` : CPU seul,
 /// soit parce qu'aucun backend GPU n'est compilé, soit parce qu'aucun périphérique n'est présent
 /// (Vulkan sans pilote ICD, ou seulement un pilote logiciel type lavapipe, que ggml ignore).
 pub fn acceleration() -> Option<(String, String)> {
+    if cpu_check().is_err() {
+        return None;
+    }
     use std::ffi::CStr;
     use whisper_rs::whisper_rs_sys as sys;
     let text = |p: *const std::os::raw::c_char| {
@@ -67,6 +119,7 @@ pub fn acceleration_label() -> String {
     match acceleration() {
         Some((backend, device)) if device.is_empty() => backend,
         Some((backend, device)) => format!("{backend} · {device}"),
+        None if cpu_check().is_err() => "Processeur non pris en charge (AVX2 absent)".into(),
         None => "Processeur".into(),
     }
 }
@@ -83,8 +136,14 @@ impl LocalEngine {
     /// Charge le modèle (GPU activé : Metal sur macOS, CUDA/Vulkan si compilés et un périphérique
     /// est présent, sinon repli CPU par whisper.cpp). Lourd.
     pub fn load(model_path: &Path) -> anyhow::Result<LocalEngine> {
-        // Redirige les journaux de whisper.cpp/ggml (sinon imprimés sur stderr).
-        LOG_HOOK.call_once(whisper_rs::install_logging_hooks);
+        // Avant tout appel ggml : sinon « illegal instruction » sur un processeur sans AVX2.
+        cpu_check()?;
+        // Redirige les journaux de whisper.cpp/ggml vers `log` (cibles whisper_rs::*).
+        LOG_HOOK.call_once(|| {
+            whisper_rs::install_logging_hooks();
+            // Instructions compilées dans ggml (« AVX2 = 1 | FMA = 1 … ») : diagnostic des lenteurs CPU.
+            log::info!("whisper.cpp : {}", whisper_rs::print_system_info().trim_end_matches([' ', '|']));
+        });
 
         let path_str = model_path
             .to_str()
@@ -100,7 +159,12 @@ impl LocalEngine {
             .map_err(|e| anyhow!("Chargement du modèle impossible ({}) : {e}", model_path.display()))?;
 
         let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
-        let threads = cores.clamp(1, 8) as i32;
+        // MURMURE_THREADS : forçage manuel (diagnostic).
+        let threads = std::env::var("MURMURE_THREADS")
+            .ok()
+            .and_then(|v| v.parse::<i32>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or_else(|| default_threads(cores));
         match &accel {
             Some((backend, device)) => log::info!("Accélération : {backend} ({device})"),
             None if cfg!(any(feature = "cuda", feature = "vulkan")) => {
@@ -217,6 +281,37 @@ mod tests {
             .unwrap_or_else(|| dirs::home_dir().unwrap().join(".whisper/models/ggml-large-v3-turbo.bin"))
     }
 
+    /// Le processeur qui exécute les tests a les instructions compilées dans ggml (sinon la garde
+    /// renverrait une erreur au lieu d'un plantage « illegal instruction »).
+    #[test]
+    fn processeur_compatible_avec_ggml() {
+        cpu_check().unwrap();
+        println!("whisper.cpp : {}", whisper_rs::print_system_info());
+    }
+
+    /// Build portable (SOURCE_DATE_EPOCH défini, comme en CI de release) : ggml doit être compilé en
+    /// x86-64-v3, ni en SSE2 scalaire (régression de la v0.1.4 : ~160 s par dictée) ni en AVX-512.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn build_portable_en_x86_64_v3() {
+        if std::env::var_os("SOURCE_DATE_EPOCH").is_none() {
+            return; // build de développement : -march=native
+        }
+        use whisper_rs::whisper_rs_sys as sys;
+        // SAFETY : drapeaux de compilation, sans état.
+        let flags = unsafe {
+            [sys::ggml_cpu_has_avx(), sys::ggml_cpu_has_avx2(), sys::ggml_cpu_has_fma(), sys::ggml_cpu_has_f16c()]
+        };
+        assert_eq!(flags, [1, 1, 1, 1], "ggml sans AVX/AVX2/FMA/F16C : cmake/ggml-x86-64-v3.cmake non appliqué");
+        assert_eq!(unsafe { sys::ggml_cpu_has_avx512() }, 0, "AVX-512 compilé : binaire non portable");
+    }
+
+    #[test]
+    fn threads_par_defaut() {
+        let got: Vec<i32> = [1, 2, 4, 8, 12, 16, 24, 32, 64].map(default_threads).to_vec();
+        assert_eq!(got, [1, 2, 4, 8, 8, 8, 12, 16, 16]);
+    }
+
     #[test]
     fn flash_attention_coupee_sur_vulkan() {
         assert!(flash_attn_ok(None));
@@ -231,7 +326,7 @@ mod tests {
         let label = acceleration_label();
         println!("Accélération : {label}");
         assert!(!label.is_empty());
-        assert_eq!(acceleration().is_none(), label == "Processeur");
+        assert_eq!(acceleration().is_none(), label.starts_with("Processeur"));
     }
 
     /// `MURMURE_TEST_WAV=/chemin.wav cargo test --lib engine::local -- --ignored --nocapture`
