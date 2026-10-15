@@ -124,6 +124,19 @@ pub fn acceleration_label() -> String {
     }
 }
 
+/// Une fenêtre de Whisper : 30 s à 16 kHz.
+const WINDOW_SAMPLES: usize = 30 * 16_000;
+
+/// Timestamps décodés (jamais affichés) au-delà d'une fenêtre de 30 s : whisper.cpp avance alors sa
+/// fenêtre jusqu'au dernier timestamp décodé. Sans eux, il avance de 30 s pile et perd les mots à
+/// cheval sur la jonction. Mesuré sur 6 dictées de 35 à 48 s (RTX 5060, beam 5) : WER de 16,6 % à
+/// 9,1 %. En deçà, une seule fenêtre suffit ; les timestamps n'y changent pas le texte mais
+/// déclenchent parfois une seconde passe sur les dernières secondes (+0,2 à 0,5 s sur GPU, une
+/// fenêtre entière sur processeur) : ils restent coupés.
+fn needs_timestamps(samples: usize) -> bool {
+    samples > WINDOW_SAMPLES
+}
+
 pub struct LocalEngine {
     ctx: WhisperContext,
     path: PathBuf,
@@ -226,7 +239,7 @@ impl LocalEngine {
         params.set_language(Some(language.as_deref().unwrap_or("auto")));
         params.set_translate(false);
         params.set_no_context(true);
-        params.set_no_timestamps(true);
+        params.set_no_timestamps(!needs_timestamps(audio.len()));
         params.set_single_segment(false);
         params.set_suppress_blank(true);
         params.set_suppress_nst(true);
@@ -313,6 +326,14 @@ mod tests {
     }
 
     #[test]
+    fn timestamps_au_dela_de_30_s() {
+        assert!(!needs_timestamps(16_000));
+        assert!(!needs_timestamps(30 * 16_000));
+        assert!(needs_timestamps(30 * 16_000 + 1));
+        assert!(needs_timestamps(48 * 16_000));
+    }
+
+    #[test]
     fn flash_attention_coupee_sur_vulkan() {
         assert!(flash_attn_ok(None));
         assert!(flash_attn_ok(Some("Metal")));
@@ -373,6 +394,72 @@ mod tests {
         assert!(silence.is_empty(), "hallucination sur silence : {silence}");
 
         assert!(warm.to_lowercase().contains("bonjour"), "transcription inattendue : {warm}");
+    }
+
+    /// Pic de mémoire résidente du processus (Linux), en Mio.
+    fn peak_rss_mib() -> Option<f64> {
+        let status = std::fs::read_to_string("/proc/self/status").ok()?;
+        let kb: f64 = status.lines().find_map(|l| l.strip_prefix("VmHWM:"))?.trim().trim_end_matches("kB").trim().parse().ok()?;
+        Some(kb / 1024.0)
+    }
+
+    /// Corpus du banc d'essai (dossiers `real`, `long`, `legal`, `ponct`, avec ou sans
+    /// `manifest.jsonl`) : un JSON `{meta, rows}` par configuration, noté par `score.py`.
+    /// `MURMURE_BENCH_DATA=data MURMURE_BENCH_CORPORA=long,ponct MURMURE_BENCH_OUT=r.json
+    ///  MURMURE_BENCH_LABEL=… cargo test --release --lib engine::local::tests::corpus_bench -- --ignored --nocapture`
+    #[test]
+    #[ignore = "nécessite un modèle et le corpus du banc d'essai"]
+    fn corpus_bench() {
+        use serde_json::{json, Value};
+        let env = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.to_string());
+        let data = PathBuf::from(env("MURMURE_BENCH_DATA", "data"));
+        let corpora = env("MURMURE_BENCH_CORPORA", "long,ponct");
+        let out = env("MURMURE_BENCH_OUT", "bench.json");
+        let label = env("MURMURE_BENCH_LABEL", "murmure");
+        let prompt = (env("MURMURE_BENCH_PROMPT", "1") != "0").then(|| crate::punctuation::PROMPT_FR.to_string());
+        let opts = TranscribeOptions { language: Some("fr".into()), initial_prompt: prompt.clone() };
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        let mut items: Vec<(String, Value)> = Vec::new();
+        for corpus in corpora.split(',').filter(|c| !c.is_empty()) {
+            let dir = data.join(corpus);
+            match std::fs::read_to_string(dir.join("manifest.jsonl")) {
+                Ok(man) => items.extend(man.lines().map(|l| (corpus.to_string(), serde_json::from_str(l).unwrap()))),
+                Err(_) => {
+                    let mut wavs: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "wav")).collect();
+                    wavs.sort();
+                    items.extend(wavs.iter().map(|p| (corpus.to_string(), json!({"wav": p.file_name().unwrap().to_string_lossy(), "ref": null}))));
+                }
+            }
+        }
+        let model = test_model();
+        let t = Instant::now();
+        let engine = LocalEngine::load(&model).unwrap();
+        let load_s = t.elapsed().as_secs_f64();
+        let first = read_wav(&data.join(&items[0].0).join(items[0].1["wav"].as_str().unwrap()));
+        let t = Instant::now();
+        engine.transcribe(&first, &opts).unwrap();
+        let first_s = t.elapsed().as_secs_f64();
+
+        let mut rows = Vec::new();
+        for (corpus, it) in &items {
+            let samples = read_wav(&data.join(corpus).join(it["wav"].as_str().unwrap()));
+            let dur = samples.len() as f64 / 16_000.0;
+            let t = Instant::now();
+            let hyp = engine.transcribe(&samples, &opts).unwrap();
+            let latency = t.elapsed().as_secs_f64();
+            // Aucun jeton spécial (timestamps compris) ne doit atteindre le texte.
+            assert!(!hyp.contains("<|") && !hyp.contains("|>"), "jeton spécial dans le texte : {hyp}");
+            println!("{corpus}/{} {latency:.2}s RTF={:.3} | {hyp}", it["wav"].as_str().unwrap(), latency / dur);
+            rows.push(json!({"corpus": corpus, "wav": it["wav"], "dur": dur, "ref": it.get("ref"),
+                "expected": it.get("expected"), "hyp": hyp, "latency": latency, "load": 0.0}));
+        }
+        let meta = json!({"engine": "murmure", "label": label, "model": model.file_name().unwrap().to_string_lossy(),
+            "threads": engine.threads, "gpu": engine.gpu, "prompt": prompt.is_some(), "load_s": load_s, "first_s": first_s,
+            "peak_rss_mib": peak_rss_mib(), "vram_delta_mib": null,
+            "size_mib": std::fs::metadata(&model).map(|m| m.len() as f64 / 1_048_576.0).unwrap_or(0.0)});
+        std::fs::write(&out, serde_json::to_string_pretty(&json!({"meta": meta, "rows": rows})).unwrap()).unwrap();
+        println!("-> {out}");
     }
 
     /// Corpus de dictées (ponctuation prononcée ou naturelle) :

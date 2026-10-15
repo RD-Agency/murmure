@@ -108,11 +108,20 @@ pub fn clean_transcript(raw: &str) -> String {
     collapsed
 }
 
-/// Supprime `[…]` (toujours non vocal chez Whisper), `♪`, et `(musique)` / `*rires*`.
+/// Supprime `[…]` (toujours non vocal chez Whisper), `<|…|>` (jeton spécial, timestamp compris),
+/// `♪`, et `(musique)` / `*rires*`.
 fn strip_tags(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(c) = rest.chars().next() {
+        if let Some(inner) = rest.strip_prefix("<|")
+            && let Some(end) = inner.find("|>")
+            && !inner[..end].contains(char::is_whitespace)
+        {
+            out.push(' ');
+            rest = &inner[end + 2..];
+            continue;
+        }
         let closing = match c {
             '[' => Some(']'),
             '(' => Some(')'),
@@ -204,6 +213,13 @@ mod tests {
             "Il a dit (en riant) que c'était bon."
         );
         assert_eq!(clean_transcript("Version 2.0 prête ? Oui !"), "Version 2.0 prête ? Oui !");
+    }
+
+    #[test]
+    fn jetons_speciaux_retires() {
+        assert_eq!(clean_transcript("<|0.00|> Bonjour Maître.<|2.40|><|2.40|> Je vous écris.<|5.12|>"), "Bonjour Maître. Je vous écris.");
+        assert_eq!(clean_transcript("<|fr|><|transcribe|> Bonjour"), "Bonjour");
+        assert_eq!(clean_transcript("a <| b |> c"), "a <| b |> c");
     }
 
     #[test]

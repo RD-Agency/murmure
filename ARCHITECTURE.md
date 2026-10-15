@@ -23,6 +23,9 @@ Deux moteurs de transcription :
   recherche en faisceau de largeur 5 sur GPU, décodage glouton sur processeur. La flash attention est
   coupée avec Vulkan : whisper.cpp ne remplit pas correctement le cache KV pour ce backend, ce qui répète
   des mots et tronque des phrases (mesuré sur RTX 5060 et lavapipe).
+  Au-delà de 30 s d'audio, les timestamps sont décodés (jamais affichés) : sans eux, whisper.cpp avance
+  sa fenêtre de 30 s pile et perd les mots à cheval sur la jonction. En deçà, ils restent coupés, car ils
+  ne changent pas le texte et déclenchent parfois une seconde passe inutile.
 - **Serveur** : tout service compatible avec `POST /v1/audio/transcriptions` d'OpenAI, authentifié par
   une clé Bearer. Le serveur de `server/` (FastAPI et faster-whisper) en est un, documenté dans
   [server/README.md](server/README.md).
