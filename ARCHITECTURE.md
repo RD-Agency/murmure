@@ -535,7 +535,12 @@ juridiques et 50 énoncés FLEURS, dictionnaire volontairement piégeux de 70 te
 | 0,45 | 0 | 0 |
 | 0,6 | 1 (« l'information » 0,55 → « l'infirmation ») | 0 |
 | 0,7 | 2 | 1 (« durant » 0,68 → « Durand ») |
+| 0,7, sur processeur (glouton) | 2 | 0 ; « durant » à 0,72 |
 | sans filtre | 5 | 3 (« matin » → « Martin » à 1,0, « mortel » → « Morel ») |
+
+Sur processeur (décodage glouton, mêmes fichiers), mêmes résultats à 0,6 : « l'information » est à
+0,599, la première erreur nuisible à 0,72. 0,6 est le seuil le plus haut sans correction nuisible sur les
+deux modes.
 
 Avec le vocabulaire dans le prompt (usage normal), Whisper ne doute presque plus : aucune correction sous
 0,8 sur ce corpus. Les erreurs restantes sont sûres d'elles (« l'affirmation » à 1,0) : elles relèvent des
