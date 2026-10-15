@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Pastille flottante (fenêtre `overlay` déclarée dans `tauri.conf.json`).
 //!
 //! Règle d'or : elle ne doit **jamais** prendre le focus de l'application active,

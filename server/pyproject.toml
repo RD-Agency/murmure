@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Serveur de transcription auto-hébergé pour Murmure (API compatible OpenAI, moteur faster-whisper)"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
-license = { text = "Proprietary" }
+license = "AGPL-3.0-or-later"
 authors = [{ name = "RD Agency" }]
 dependencies = [
     # Moteur : versions épinglées (compatibilité CUDA 12.8 / cuDNN 9 vérifiée pour ctranslate2 4.8.x).

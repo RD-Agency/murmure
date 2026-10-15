@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Capture micro (cpal) → mono 16 kHz f32, avec niveau RMS pour la pastille.
 //!
 //! Le `cpal::Stream` n'est pas `Send` sur macOS : il vit entièrement dans un thread

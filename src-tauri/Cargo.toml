@@ -3,6 +3,8 @@ name = "murmure"
 version = "0.1.4"
 description = "Murmure — dictée vocale locale ou serveur"
 authors = ["RD Agency"]
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/RD-Agency/murmure"
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

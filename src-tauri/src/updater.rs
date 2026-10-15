@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Mises à jour automatiques et silencieuses (`tauri-plugin-updater`).
 //!
 //! - Vérification 10 s après le démarrage puis toutes les heures, jamais pendant une dictée.

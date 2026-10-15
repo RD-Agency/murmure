@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Journalisation structurée (une ligne JSON par événement).
 
 Confidentialité : on ne journalise JAMAIS le texte transcrit, le prompt, ni l'audio.

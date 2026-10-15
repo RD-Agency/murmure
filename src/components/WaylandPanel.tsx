@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { type ReactNode, useEffect, useState } from "react";
 import { api, errorMessage } from "../lib/api";
 import type { PortalState, WaylandStatus } from "../lib/types";

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Seule porte vers Rust : wrappers typés autour de invoke/listen.
 // Hors Tauri (navigateur), bascule automatiquement sur un mock (src/lib/mock.ts).
 

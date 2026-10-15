@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Installation automatique du modèle local.
 //!
 //! - Au démarrage, quand on passe au moteur local ou qu'on change de modèle dans les réglages,

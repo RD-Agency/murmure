@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Permissions système : micro et accessibilité (macOS surtout).
 
 use serde::Serialize;

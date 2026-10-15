@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Catalogue et téléchargement des modèles ggml de whisper.cpp (Hugging Face).
 //!
 //! - Dossier propre à Murmure : `<data_dir>/models/ggml-<id>.bin`.

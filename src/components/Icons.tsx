@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Icônes SVG fines, style Lucide (trait 1.6, 24×24).
 import type { SVGProps } from "react";
 

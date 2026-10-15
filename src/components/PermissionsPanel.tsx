@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { api } from "../lib/api";
 import type { Permissions, Platform } from "../lib/types";

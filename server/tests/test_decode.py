@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Décodage audio réel via PyAV (sans modèle) : protège contre une régression de dépendance."""
 
 from __future__ import annotations

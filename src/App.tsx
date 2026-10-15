@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { useEffect } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { useApp } from "./store";

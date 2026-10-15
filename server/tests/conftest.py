@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Fixtures : moteur factice injecté, application de test, audio WAV synthétique."""
 
 from __future__ import annotations

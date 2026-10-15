@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Historique local des dictées : `history.json` dans le dossier de données de l'app.
 //!
 //! Plus récent d'abord, plafonné à [`MAX_ENTRIES`]. Les écritures sont atomiques

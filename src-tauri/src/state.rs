@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! État partagé de l'application (géré par Tauri via `app.manage`).
 //!
 //! Tous les verrous sont des `parking_lot::Mutex` : on ne les garde jamais

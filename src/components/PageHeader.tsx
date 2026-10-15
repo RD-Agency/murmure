@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import type { ReactNode } from "react";
 
 /** En-tête de page, servant aussi de zone de drag de la fenêtre. */

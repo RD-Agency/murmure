@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Portails XDG sous Wayland (Linux uniquement) :
 //!
 //! - `org.freedesktop.portal.GlobalShortcuts` : raccourci global `dictation`. `Activated` = appui,

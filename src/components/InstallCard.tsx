@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { downloadPercent, formatProgressSize } from "../lib/format";
 import type { DownloadProgress, ModelInfo } from "../lib/types";
 import { useApp } from "../store";

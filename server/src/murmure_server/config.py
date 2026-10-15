@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Configuration du serveur, lue depuis les variables d'environnement `MURMURE_*` (ou un `.env`)."""
 
 from __future__ import annotations

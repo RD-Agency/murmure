@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Mode démo : simule le backend Rust dans un navigateur (pnpm dev sans Tauri).
 // Données persistées dans localStorage (`?reset` pour repartir de zéro),
 // événements relayés entre onglets via BroadcastChannel (fenêtre principale ↔ overlay.html).

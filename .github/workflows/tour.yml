@@ -12,8 +12,13 @@ on:
         description: Commande bash à exécuter à la racine du dépôt
         default: uname -a && nproc && free -h && (docker --version || true) && nvidia-smi
 
+# Déclenchement manuel uniquement (droits d'écriture requis), jamais sur une PR.
+permissions:
+  contents: read
+
 jobs:
   run:
+    if: github.repository == 'RD-Agency/murmure'
     runs-on: [self-hosted, murmure-cuda]
     timeout-minutes: 180
     steps:

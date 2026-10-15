@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Miroir exact du contrat Rust (ARCHITECTURE.md). Ne pas diverger.
 
 export type EngineKind = "local" | "remote";

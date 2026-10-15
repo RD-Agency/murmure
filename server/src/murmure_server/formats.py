@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Mise en forme des réponses : json, text, verbose_json, srt, vtt (comme l'API OpenAI)."""
 
 from __future__ import annotations

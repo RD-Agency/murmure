@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { useEffect, useRef, useState } from "react";
 import { eventToAccelerator, liveModifiers } from "../lib/format";
 import type { Platform } from "../lib/types";

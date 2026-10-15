@@ -1,308 +1,336 @@
-# Murmure — architecture et contrat interne
+# Architecture de Murmure
 
-Murmure est une app de dictée vocale façon Wispr Flow : on maintient un raccourci, on parle,
-on relâche, le texte apparaît dans l'application active. Deux moteurs :
+Ce document décrit l'organisation du code et les contrats entre ses parties. Il s'adresse à qui veut
+modifier Murmure. Pour l'utiliser, voir le [README](README.md).
 
-- **Local** : Whisper large-v3-turbo via whisper.cpp (`whisper-rs`), Metal sur macOS, CUDA (`--features cuda`) ou
-  Vulkan (`--features vulkan`) en option, exclusifs. Accélérateur détecté à l'exécution (`engine::local::acceleration`,
-  premier périphérique ggml de type GPU, même règle que whisper.cpp) : beam search 5 sur GPU, greedy sur CPU.
-  Flash attention coupée sur Vulkan (whisper.cpp ne remplit pas le cache KV pour ce backend : mots répétés,
-  phrases tronquées mesurés sur RTX 5060 et lavapipe).
-- **Serveur** : n'importe quel endpoint compatible OpenAI `POST /v1/audio/transcriptions`
-  (notre serveur `server/` à base de faster-whisper, ou OpenAI / Groq), authentifié par clé API (Bearer).
+## Vue d'ensemble
 
-Cibles : macOS (Apple Silicon d'abord), Linux KDE (X11 et Wayland), Windows.
+Murmure est une application [Tauri 2](https://tauri.app). Le cœur est en Rust (`src-tauri/`) : capture du
+micro, raccourci global, transcription, collage, mises à jour. L'interface est en React et TypeScript
+(`src/`) et ne fait que régler et afficher : elle ne parle à Rust que par les commandes et les événements
+décrits plus bas.
+
+Deux fenêtres partagent le même front : la fenêtre principale (`index.html`, `src/main.tsx`) et la pastille
+flottante qui s'affiche pendant une dictée (`overlay.html`, `src/overlay.tsx`). Au quotidien, la fenêtre
+principale reste fermée ; l'application vit dans la barre de menus.
+
+Deux moteurs de transcription :
+
+- **Local** : Whisper via whisper.cpp (crate `whisper-rs`). Le modèle reste chargé en mémoire entre deux
+  dictées. Accélération Metal sur macOS ; sous Linux et Windows, CUDA (`--features cuda`) ou Vulkan
+  (`--features vulkan`), exclusifs l'un de l'autre. L'accélérateur est détecté à l'exécution
+  (`engine::local::acceleration`, premier périphérique ggml de type GPU, même règle que whisper.cpp) :
+  recherche en faisceau de largeur 5 sur GPU, décodage glouton sur processeur. La flash attention est
+  coupée avec Vulkan : whisper.cpp ne remplit pas correctement le cache KV pour ce backend, ce qui répète
+  des mots et tronque des phrases (mesuré sur RTX 5060 et lavapipe).
+- **Serveur** : tout service compatible avec `POST /v1/audio/transcriptions` d'OpenAI, authentifié par
+  une clé Bearer. Le serveur de `server/` (FastAPI et faster-whisper) en est un, documenté dans
+  [server/README.md](server/README.md).
 
 ## Arborescence
 
 ```
-src/                    Front React + TS + Tailwind v4
-  main.tsx              Fenêtre principale (index.html)
-  overlay.tsx           Pastille flottante (overlay.html)
-  lib/api.ts            Wrappers typés invoke/listen (SEULE porte vers Rust)
-  lib/types.ts          Types partagés (miroir des structs Rust ci-dessous)
+src/                      Front React, TypeScript, Tailwind CSS 4
+  main.tsx                fenêtre principale
+  overlay.tsx             pastille flottante
+  lib/api.ts              appels typés à Rust : seul point de contact avec le backend
+  lib/types.ts            types partagés, miroir des structures Rust
+  lib/mock.ts             faux backend du mode démo dans le navigateur
+  views/, components/     écrans (accueil, historique, réglages, assistant) et composants
 src-tauri/src/
-  lib.rs                Builder Tauri, plugins, enregistrement des commandes, setup   [agent système]
-  state.rs              AppState partagé (Mutex) + machine d'états de la dictée      [agent système]
-  pipeline.rs           start/stop/cancel → audio → moteur → injection → historique  [agent système]
-  hotkey.rs             Raccourci global (hold / toggle / hybride)                   [agent système]
-  inject.rs             Collage dans l'app active (presse-papiers + Cmd/Ctrl+V)      [agent système]
-  wayland.rs            Détection de session Wayland, état des portails, conversions pures
-  portal.rs             Linux : portails XDG GlobalShortcuts + RemoteDesktop (ashpd/zbus)
-  overlay.rs            Positionnement / affichage de la fenêtre overlay             [agent système]
-  tray.rs               Icône de barre de menus                                      [agent système]
-  permissions.rs        Micro / Accessibilité (macOS)                                [agent système]
-  history.rs            Historique JSON local                                        [agent système]
-  settings.rs           Réglages JSON + clé API dans le trousseau                    [agent audio/moteurs]
-  audio.rs              Capture micro cpal → mono 16 kHz f32, niveau RMS             [agent audio/moteurs]
-  models.rs             Catalogue (tailles + SHA256) + téléchargement des modèles ggml [agent audio/moteurs]
-  install.rs            Installation automatique du modèle local + CLI --install-model
-  updater.rs            Mises à jour automatiques (tauri-plugin-updater) : vérification, installation
-  engine/mod.rs         enum Engine + TranscribeOptions                              [agent audio/moteurs]
-  engine/local.rs       whisper-rs, contexte gardé en mémoire                        [agent audio/moteurs]
-  engine/remote.rs      Client HTTP multipart compatible OpenAI                      [agent audio/moteurs]
-server/                 Serveur FastAPI + faster-whisper, Docker CUDA/CPU            [agent serveur]
+  lib.rs                  construction de l'app Tauri, greffons, commandes, démarrage
+  state.rs                état partagé (AppState) et machine d'états de la dictée
+  pipeline.rs             démarrer, arrêter, annuler : audio, moteur, collage, historique
+  hotkey.rs               raccourci global : maintien, bascule, hybride
+  inject.rs               collage dans l'application active
+  wayland.rs              détection d'une session Wayland, état des portails, conversions
+  portal.rs               portails XDG GlobalShortcuts et RemoteDesktop (Linux)
+  overlay.rs              position et affichage de la pastille
+  tray.rs                 icône et menu de la barre de menus
+  permissions.rs          micro et Accessibilité (macOS)
+  history.rs              historique local (history.json)
+  settings.rs             réglages (settings.json) et clé API dans le trousseau
+  audio.rs                capture du micro (cpal), conversion en mono 16 kHz, niveau sonore
+  models.rs               catalogue des modèles, téléchargement vérifié
+  install.rs              installation automatique du modèle, option --install-model
+  updater.rs              mises à jour automatiques
+  punctuation.rs          ponctuation dictée en français
+  engine/mod.rs           types communs aux moteurs
+  engine/local.rs         moteur local (whisper-rs)
+  engine/remote.rs        client HTTP compatible OpenAI
+server/                   serveur de transcription (Python, FastAPI, faster-whisper, Docker)
+tests/wayland-kde/        test d'intégration du portail des raccourcis sous KDE Wayland (Docker)
+.github/workflows/        CI, release et workflow manuel sur le runner GPU
+.github/scripts/          publication : page de téléchargement, liens latest/, manifestes
 ```
 
-## Réglages (`settings.json` dans le dossier de config de l'app)
+## Déroulement d'une dictée
+
+```
+raccourci pressé   ─► état recording, pastille visible, son de départ, Recorder::start
+raccourci relâché  ─► mode hybride : appui de moins de 300 ms → mains libres, on attend un second appui
+                   ─► Recorder::stop ─► état transcribing
+                   ─► LocalEngine::transcribe (thread bloquant) ou RemoteEngine::transcribe (async)
+                   ─► nettoyage du texte, ponctuation dictée ─► inject::paste ─► historique
+                   ─► événement dictation-result, état idle, pastille masquée
+Échap pendant l'enregistrement ─► cancel_dictation (X11, macOS, Windows)
+enregistrement de moins de 250 ms, ou silence ─► abandon sans message
+```
+
+## Réglages
+
+Fichier `settings.json` dans le dossier de configuration de l'application (identifiant
+`fr.rdagency.murmure`). Tous les champs ont une valeur par défaut : un fichier absent ou corrompu donne les
+réglages par défaut.
 
 ```jsonc
 {
   "engine": "local",                       // "local" | "remote"
-  "local_model": "large-v3-turbo-q5_0",    // id du catalogue models.rs
-  "language": "fr",                        // "auto" | code ISO 639-1
-  "initial_prompt": "",                    // vocabulaire / style (noms propres, jargon)
+  "local_model": "large-v3-turbo-q5_0",    // identifiant du catalogue de models.rs
+  "language": "fr",                        // "auto" ou code ISO 639-1
+  "initial_prompt": "",                    // vocabulaire : noms propres, termes techniques
+  "spoken_punctuation": true,              // ponctuation dictée (langue fr ou auto)
   "remote_endpoint": "",                   // ex. https://stt.exemple.fr/v1/audio/transcriptions
   "remote_model": "whisper-large-v3-turbo",
-  "hotkey": "Alt+Space",                   // format accelerator Tauri ; défaut Linux/Windows : "Ctrl+Alt+Space"
-  "hotkey_mode": "hybrid",                 // "hybrid" (tap = mains libres, maintien = push-to-talk) | "hold" | "toggle"
+  "hotkey": "Alt+Space",                   // format accelerator de Tauri ; "Ctrl+Alt+Space" hors macOS
+  "hotkey_mode": "hybrid",                 // "hybrid" | "hold" | "toggle"
   "input_device": null,                    // null = micro par défaut, sinon nom du périphérique
-  "paste_mode": "paste",                   // "paste" (presse-papiers + Cmd/Ctrl+V) | "clipboard" (copie seule)
+  "paste_mode": "paste",                   // "paste" (presse-papiers puis Cmd/Ctrl+V) | "clipboard" (copie seule)
   "restore_clipboard": true,
   "sounds": true,
   "launch_at_login": false,
   "history_enabled": true,
   "onboarding_done": false,
-  "wayland_restore_token": null            // Linux Wayland : jeton du portail RemoteDesktop (géré par Rust)
+  "wayland_restore_token": null            // jeton du portail RemoteDesktop, géré par Rust
 }
 ```
 
-La clé API n'est **jamais** dans `settings.json` : trousseau système (`keyring`, service `fr.rdagency.murmure`, compte `remote_api_key`).
+La clé API n'est jamais écrite dans `settings.json`. Elle est rangée dans le trousseau du système (crate
+`keyring`, service `fr.rdagency.murmure`, compte `remote_api_key`).
 
-## Commandes Tauri (front → Rust)
+## Commandes (front vers Rust)
 
-Noms snake_case côté Rust, arguments camelCase côté JS (convention Tauri). Erreurs : `Result<T, String>`.
+Les noms sont en snake_case côté Rust, les arguments en camelCase côté JavaScript (convention de Tauri).
+Toutes renvoient `Result<T, String>` : le message d'erreur est affiché tel quel, il doit donc être rédigé
+en français pour l'utilisateur.
 
 | Commande | Arguments | Retour |
 |---|---|---|
 | `get_settings` | — | `Settings` |
-| `save_settings` | `settings: Settings` | `()` — réapplique raccourci, autostart, recharge moteur si besoin |
-| `set_api_key` | `key: string` (vide = suppression) | `()` |
+| `save_settings` | `settings` | `()` ; réapplique le raccourci et le lancement au démarrage, recharge le moteur si besoin |
+| `set_api_key` | `key` (vide = suppression) | `()` |
 | `has_api_key` | — | `bool` |
-| `test_remote` | `endpoint: string, apiKey: string \| null, model: string` | `string` (message de succès + latence) |
+| `test_remote` | `endpoint`, `apiKey`, `model` | message de succès avec la latence |
 | `list_input_devices` | — | `AudioDevice[]` |
 | `list_models` | — | `ModelInfo[]` |
-| `download_model` | `id: string` | `()` (progression par événement) ; rejoint le téléchargement déjà en cours au lieu d'échouer |
-| `get_downloads` | — | `DownloadStatus[]` : téléchargements en cours, y compris ceux lancés par Rust au démarrage |
-| `cancel_download` | `id: string` | `()` |
-| `delete_model` | `id: string` | `()` |
-| `start_dictation` / `stop_dictation` / `cancel_dictation` / `toggle_dictation` | — | `()` |
-| `get_history` | — | `HistoryEntry[]` (plus récent d'abord) |
-| `delete_history_entry` | `id: string` | `()` |
+| `download_model` | `id` | `()` ; progression par événement ; rejoint un téléchargement déjà en cours |
+| `get_downloads` | — | `DownloadStatus[]`, y compris ceux lancés par Rust au démarrage |
+| `cancel_download`, `delete_model` | `id` | `()` |
+| `start_dictation`, `stop_dictation`, `cancel_dictation`, `toggle_dictation` | — | `()` |
+| `get_history` | — | `HistoryEntry[]`, du plus récent au plus ancien |
+| `delete_history_entry` | `id` | `()` |
 | `clear_history` | — | `()` |
-| `copy_text` | `text: string` | `()` |
-| `check_permissions` | — | `Permissions` |
-| `request_microphone` | — | `Permissions` |
-| `open_permission_settings` | `kind: "microphone" \| "accessibility"` | `()` |
-| `get_platform` | — | `"macos" \| "linux" \| "windows"` |
-| `get_acceleration` | — | `string` : « Metal · Apple M2 », « Vulkan · NVIDIA GeForce RTX 5050 », « CUDA · … » ou « Processeur » |
-| `check_update` | — | `UpdateInfo \| null` : `null` si à jour ou manifeste absent (404) ; erreur si réseau injoignable. Toujours `null` en dev |
-| `install_update` | — | `()` : télécharge (`update-progress`), installe puis relance l'app (ne rend pas la main en cas de succès). Refusé pendant une dictée |
+| `copy_text` | `text` | `()` |
+| `check_permissions`, `request_microphone` | — | `Permissions` |
+| `open_permission_settings` | `kind` : `"microphone"` ou `"accessibility"` | `()` |
+| `get_platform` | — | `"macos"`, `"linux"` ou `"windows"` |
+| `get_acceleration` | — | par exemple « Metal · Apple M2 », « Vulkan · NVIDIA GeForce RTX 5050 », « Processeur » |
+| `check_update` | — | `UpdateInfo` ou `null` (à jour, manifeste absent, ou build de développement) ; erreur si le réseau est injoignable |
+| `install_update` | — | télécharge, installe et relance ; refusé pendant une dictée |
 | `get_wayland_status` | — | `WaylandStatus` (`wayland: false` hors session Wayland) |
-| `wayland_authorize` | — | `WaylandStatus` : demandes de portail raccourci + clavier (boîtes de dialogue du bureau) |
-| `wayland_configure_shortcut` | — | `()` : ouvre le réglage du raccourci du bureau (`ConfigureShortcuts`, portail v2) |
-| `wayland_refresh` | — | `WaylandStatus` : relit le raccourci attribué (`ListShortcuts`) et l'outil de secours |
+| `wayland_authorize` | — | `WaylandStatus` ; déclenche les demandes de portail (raccourci, clavier) |
+| `wayland_configure_shortcut` | — | `()` ; ouvre le réglage du raccourci du bureau (`ConfigureShortcuts`) |
+| `wayland_refresh` | — | `WaylandStatus` ; relit le raccourci attribué et l'outil de collage de secours |
 
-## Événements (Rust → front, `emit` global)
+## Événements (Rust vers front)
 
-| Événement | Payload |
+| Événement | Contenu |
 |---|---|
-| `dictation-state` | `{ state: "idle" \| "recording" \| "transcribing" \| "error", message?: string, hands_free?: bool }` |
-| `audio-level` | `number` 0..1, ~30 Hz pendant l'enregistrement |
+| `dictation-state` | `{ state: "idle" \| "recording" \| "transcribing" \| "error", message?, hands_free? }` |
+| `audio-level` | niveau de 0 à 1, environ 30 fois par seconde pendant l'enregistrement |
 | `dictation-result` | `HistoryEntry` |
-| `model-download-progress` | `{ id, downloaded, total, done: bool, error?: string }` |
+| `model-download-progress` | `{ id, downloaded, total, done, error? }` |
 | `settings-changed` | `Settings` |
-| `navigate` | `"home" \| "history" \| "settings"` (depuis le tray) |
-| `update-available` | `UpdateInfo` — vérification de fond ou `check_update` |
-| `update-progress` | `{ downloaded, total }` octets cumulés (`total` = 0 si inconnu), ~10 Hz |
+| `navigate` | `"home"`, `"history"` ou `"settings"`, depuis le menu de la barre de menus |
+| `update-available` | `UpdateInfo` |
+| `update-progress` | `{ downloaded, total }` en octets (`total` vaut 0 s'il est inconnu), environ 10 fois par seconde |
 | `wayland-status` | `WaylandStatus`, à chaque changement d'état des portails |
 
-## Types
+## Types partagés
 
 ```ts
-type AudioDevice   = { name: string; is_default: boolean };
-type ModelInfo     = { id: string; name: string; description: string; size_mb: number;
-                       downloaded: boolean; recommended: boolean; path: string | null };
-type HistoryEntry  = { id: string; text: string; created_at: string /* RFC3339 */;
-                       duration_ms: number; latency_ms: number; engine: "local" | "remote";
-                       model: string };
+type AudioDevice    = { name: string; is_default: boolean };
+type ModelInfo      = { id: string; name: string; description: string; size_mb: number;
+                        downloaded: boolean; recommended: boolean; path: string | null };
+type HistoryEntry   = { id: string; text: string; created_at: string /* RFC 3339 */;
+                        duration_ms: number; latency_ms: number; engine: "local" | "remote"; model: string };
 type DownloadStatus = { id: string; downloaded: number; total: number };
-type Permissions   = { microphone: "granted" | "denied" | "undetermined" | "unknown";
-                       accessibility: "granted" | "denied" | "unknown" };
-type UpdateInfo    = { version: string; notes: string | null };
-type PortalState   = "inactive" | "pending" | "active" | "denied" | "unavailable";
-type WaylandStatus = { wayland: boolean; shortcut: PortalState; shortcut_trigger: string | null;
-                       shortcut_configurable: boolean; shortcut_error: string | null;
-                       keyboard: PortalState; keyboard_error: string | null;
-                       paste_fallback: "ydotool" | "wtype" | null };
+type Permissions    = { microphone: "granted" | "denied" | "undetermined" | "unknown";
+                        accessibility: "granted" | "denied" | "unknown" };
+type UpdateInfo     = { version: string; notes: string | null };
+type PortalState    = "inactive" | "pending" | "active" | "denied" | "unavailable";
+type WaylandStatus  = { wayland: boolean; shortcut: PortalState; shortcut_trigger: string | null;
+                        shortcut_configurable: boolean; shortcut_error: string | null;
+                        keyboard: PortalState; keyboard_error: string | null;
+                        paste_fallback: "ydotool" | "wtype" | null };
 ```
 
-## API Rust entre modules (à respecter à la lettre)
+`src/lib/types.ts` doit rester aligné sur les structures Rust : un champ ajouté d'un côté s'ajoute de
+l'autre, et dans `src/lib/mock.ts`.
+
+## Interfaces entre modules Rust
 
 ```rust
 // settings.rs
-#[derive(Clone, Serialize, Deserialize)] pub struct Settings { /* champs ci-dessus, #[serde(default)] */ }
-#[derive(Clone, Copy, Serialize, Deserialize, PartialEq)] #[serde(rename_all="snake_case")] pub enum EngineKind { Local, Remote }
-#[derive(Clone, Copy, Serialize, Deserialize, PartialEq)] #[serde(rename_all="snake_case")] pub enum HotkeyMode { Hybrid, Hold, Toggle }
-#[derive(Clone, Copy, Serialize, Deserialize, PartialEq)] #[serde(rename_all="snake_case")] pub enum PasteMode { Paste, Clipboard }
-pub fn load(config_dir: &Path) -> Settings;                      // défauts si absent/corrompu
+pub fn load(config_dir: &Path) -> Settings;                     // valeurs par défaut si absent ou corrompu
 pub fn save(config_dir: &Path, s: &Settings) -> anyhow::Result<()>;
 pub fn get_api_key() -> Option<String>;
 pub fn set_api_key(key: &str) -> anyhow::Result<()>;            // "" = suppression
 
 // audio.rs
 pub fn list_input_devices() -> Vec<AudioDevice>;
-pub struct Recorder { .. }                                       // Send
 impl Recorder {
-    /// Démarre la capture. `on_level` est appelé ~30 fois/s avec un niveau 0..1 (hors thread temps réel).
+    /// Démarre la capture ; `on_level` est appelé environ 30 fois par seconde, hors du thread temps réel.
     pub fn start(device: Option<&str>, on_level: impl Fn(f32) + Send + 'static) -> anyhow::Result<Recorder>;
-    /// Arrête et renvoie l'audio mono 16 kHz f32.
+    /// Arrête et renvoie l'audio en mono 16 kHz, f32.
     pub fn stop(self) -> anyhow::Result<Vec<f32>>;
 }
 
 // models.rs
-pub fn models_dir(data_dir: &Path) -> PathBuf;
+pub const RECOMMENDED_ID: &str;                                  // "large-v3-turbo-q5_0"
 pub fn list(data_dir: &Path) -> Vec<ModelInfo>;
-pub fn model_path(data_dir: &Path, id: &str) -> Option<PathBuf>; // Some si présent sur disque
+pub fn model_path(data_dir: &Path, id: &str) -> Option<PathBuf>; // Some si le fichier est présent
+pub fn resolve_id(id: &str) -> &'static str;                     // identifiant inconnu → recommandé
 pub async fn download(data_dir: &Path, id: &str, cancel: Arc<AtomicBool>,
                       on_progress: impl Fn(u64, u64) + Send + 'static) -> anyhow::Result<PathBuf>;
-// download : espace disque vérifié avant, reprise du .part (Range), SHA256 calculé en streaming,
-// taille + empreinte vérifiées à la fin, 3 nouvelles tentatives après erreur réseau (5 s, 15 s, 45 s).
-// Erreurs : models::DownloadError { Cancelled, Network, Corrupt, NoSpace, Fatal } dans anyhow.
-pub const RECOMMENDED_ID: &str;                                  // "large-v3-turbo-q5_0"
-pub fn resolve_id(id: &str) -> &'static str;                     // id inconnu → recommandé
 pub fn delete(data_dir: &Path, id: &str) -> anyhow::Result<()>;
 
-// engine/mod.rs
+// engine/
 pub struct TranscribeOptions { pub language: Option<String> /* None = auto */, pub initial_prompt: Option<String> }
-pub struct LocalEngine { .. }   // engine/local.rs
 impl LocalEngine {
-    pub fn load(model_path: &Path) -> anyhow::Result<LocalEngine>;   // lourd : appeler hors thread UI
-    pub fn model_path(&self) -> &Path;
+    pub fn load(model_path: &Path) -> anyhow::Result<LocalEngine>;   // lent : hors du thread de l'interface
     pub fn transcribe(&self, samples: &[f32], opts: &TranscribeOptions) -> anyhow::Result<String>;
 }
-pub struct RemoteEngine { pub endpoint: String, pub api_key: Option<String>, pub model: String }
 impl RemoteEngine {
     pub async fn transcribe(&self, samples: &[f32], opts: &TranscribeOptions) -> anyhow::Result<String>;
-    pub async fn test(&self) -> anyhow::Result<String>;            // envoie 1 s de silence, renvoie un message lisible
+    pub async fn test(&self) -> anyhow::Result<String>;            // envoie une seconde de silence
 }
-pub fn encode_wav(samples: &[f32]) -> Vec<u8>;                     // PCM 16 bits mono 16 kHz
+pub fn encode_wav(samples: &[f32]) -> Vec<u8>;                     // PCM 16 bits, mono, 16 kHz
 ```
 
-## Installation automatique du modèle local (`install.rs`)
+`models::download` vérifie l'espace disque avant de commencer, reprend un fichier `.part` interrompu
+(requête `Range`), calcule le SHA-256 au fil de l'eau et contrôle taille et empreinte à la fin. Après une
+erreur réseau, il réessaie trois fois (après 5, 15 puis 45 secondes). Ses erreurs sont des
+`models::DownloadError` (`Cancelled`, `Network`, `Corrupt`, `NoSpace`, `Fatal`) dans un `anyhow::Error`.
 
-- Déclencheurs : démarrage (setup), `save_settings` qui passe `engine` à `local` ou change `local_model`,
-  dictée sans modèle. Cible : `local_model`, ou `RECOMMENDED_ID` si l'id est inconnu ; rien si le modèle
-  est déjà sur disque (dossier Murmure ou `~/.whisper/models`).
-- Registre `state::Downloads` : un seul téléchargement par id ; un second appel (clic UI) le rejoint.
-  Mêmes événements `model-download-progress` et même annulation (`cancel_download`) que le bouton.
-- Fin : si le modèle choisi est absent, on sélectionne celui installé (`settings-changed`), puis préchargement
-  du moteur. La fenêtre principale n'est ouverte de force qu'en cas d'échec du téléchargement.
-- Dictée pendant l'installation : état `error`, message « Installation du modèle en cours (42 %) — réessayez
-  dans un instant » ; sans téléchargement en cours, il est lancé et le message est « Installation du modèle… ».
-- `murmure --install-model [id]` (ou `--install-model=id`) : mode console traité avant Tauri et le
-  single-instance, aucune fenêtre ; progression sur stdout (ligne réécrite sur un terminal, une ligne
-  tous les 5 % sinon). Sans id : le modèle des réglages. Codes de sortie : 0 succès, 1 échec, 2 id inconnu.
-- `MURMURE_DATA_DIR` : remplace le dossier de données (modèles, historique) de l'app et du CLI.
+## Installation du modèle (`install.rs`)
+
+Le modèle s'installe sans intervention : au démarrage, quand les réglages passent au moteur local ou
+changent de modèle, et lors d'une dictée sans modèle. Rien n'est téléchargé si le modèle est déjà présent,
+dans le dossier de Murmure ou dans `~/.whisper/models`.
+
+Un seul téléchargement par modèle à la fois (`state::Downloads`) : un clic dans l'interface rejoint celui
+qui est en cours. Une dictée pendant l'installation affiche « Installation du modèle en cours (42 %) —
+réessayez dans un instant ». À la fin, si le modèle choisi manque, Murmure sélectionne celui qui vient
+d'être installé, puis précharge le moteur. La fenêtre principale ne s'ouvre d'elle-même qu'en cas d'échec.
+
+`murmure --install-model [id]` (ou `--install-model=id`) est traité avant le démarrage de Tauri, sans
+fenêtre. La progression s'affiche sur la sortie standard. Codes de sortie : 0 succès, 1 échec, 2 identifiant
+inconnu. La variable `MURMURE_DATA_DIR` remplace le dossier de données (modèles, historique), pour l'app
+comme pour cette commande.
 
 ## Mises à jour (`updater.rs`)
 
-- Manifeste : `https://crgenerator.s3.eu-west-par.io.cloud.ovh.net/murmure/latest.json` (format Tauri v2,
-  clés `darwin-aarch64`, `darwin-x86_64`, `linux-x86_64`, `windows-x86_64`), publié par la CI.
-  Clé publique minisign dans `tauri.conf.json` (`plugins.updater.pubkey`) ; la clé privée et son mot de passe
-  ne vivent que dans `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (CI / poste de build).
-- `bundle.createUpdaterArtifacts: true` : `pnpm tauri build` produit `Murmure.app.tar.gz` + `.sig` (macOS),
-  `.AppImage.tar.gz`/`.sig` ou équivalents (Linux), installeur + `.sig` (Windows, `installMode: "passive"`).
-- Vérification 10 s après le démarrage puis toutes les heures, jamais pendant une dictée, désactivée en build
-  debug. **Tout est automatique** : la mise à jour trouvée est téléchargée en silence (signature vérifiée),
-  installée sur disque (macOS, AppImage) ou gardée en mémoire (Windows), puis `update-ready` + entrée
-  « Redémarrer pour passer à la version x.y.z » du tray + bannière « prête ».
-- Redémarrage automatique quand l'app est inactive depuis 2 min (aucune dictée, aucun téléchargement de modèle,
-  fenêtre principale masquée) : marqueur `relaunch-hidden` dans le dossier de config puis `app.restart()` (ou
-  l'installeur NSIS sous Windows, qui relance l'app) ; au lancement suivant le marqueur est consommé et l'app
-  démarre sans fenêtre. Windows installe aussi en quittant l'app. Le bouton « Redémarrer maintenant » applique
-  tout de suite.
-- Variante Linux NVIDIA (`--features cuda`, paquets `…-linux-x64-cuda.deb/.rpm`) : les bibliothèques CUDA 12
-  (`libcudart`, `libcublas`, `libcublasLt`) sont livrées dans `/usr/lib/murmure/cuda` (rpath posé par `build.rs`),
-  seul le pilote NVIDIA est requis (CUDA 12 ou 13). Manifeste de mise à jour dédié `cuda/latest.json` pour ne
-  jamais basculer vers la version sans GPU.
-- Variante Linux Vulkan (`--features vulkan`, paquets `…-linux-x64-vulkan.deb/.rpm`, pas d'AppImage) : rien
-  d'embarqué, dépendance `libvulkan1` (.deb) / `libvulkan.so.1()(64bit)` (.rpm, nom de paquet variable selon la
-  distribution). Build : `libvulkan-dev` + `glslc` et en-têtes du SDK LunarG (`VULKAN_SDK`, glslc absent d'Ubuntu
-  22.04). Exécution : sans ICD Vulkan, l'instance échoue proprement (`ggml_backend_vk_reg` → nullptr) ; un pilote
-  logiciel seul (lavapipe, type CPU) est ignoré par ggml ; dans les deux cas repli CPU (log `warn`). Loader Vulkan
-  < 1.2 : abandon de ggml (aucune distribution cible concernée). Manifeste dédié `vulkan/latest.json`.
-- Linux .deb / .rpm : l'installation exige root, la mise à jour est seulement annoncée (`update-available`,
-  bouton « Installer »). L'AppImage (variable `APPIMAGE`) est mise à jour en silence.
-- Manifeste absent (404), plateforme absente, réseau coupé : log debug uniquement (les logs `error` du plugin
-  sont coupés via `tauri_plugin_updater=off` dans le filtre par défaut, surchargeable par `RUST_LOG`).
-- Mode démo navigateur : `?update` simule une 0.2.0 disponible, `?update=ready` une 0.2.0 prête, `?update=error`
-  un serveur injoignable.
+Le manifeste est `https://crgenerator.s3.eu-west-par.io.cloud.ovh.net/murmure/latest.json`, au format de
+Tauri 2, publié par la release. La clé publique minisign est dans `tauri.conf.json`
+(`plugins.updater.pubkey`) ; la clé privée n'existe que dans les secrets de la CI.
+
+La vérification a lieu dix secondes après le démarrage puis toutes les heures, jamais pendant une dictée,
+et jamais en build de développement. Une mise à jour trouvée est téléchargée en silence et sa signature
+vérifiée. Elle est installée sur disque (macOS, AppImage) ou gardée en mémoire (Windows). Le menu de la
+barre de menus propose alors de redémarrer.
+
+Quand l'application est inactive depuis deux minutes (aucune dictée, aucun téléchargement, fenêtre
+principale fermée), Murmure pose le marqueur `relaunch-hidden` et redémarre ; au lancement suivant, le
+marqueur est consommé et l'application démarre sans fenêtre. Avec les paquets .deb et .rpm, l'installation
+demande les droits administrateur : la mise à jour est seulement proposée, avec un bouton.
+
+Un manifeste absent (404) ou un réseau coupé ne produit qu'un message de niveau debug.
+
+## Variantes Linux
+
+**NVIDIA** (`--features cuda`, paquets `…-linux-x64-cuda`) : `libcudart`, `libcublas` et `libcublasLt`
+(CUDA 12) sont livrées dans `/usr/lib/murmure/cuda`, trouvées grâce au rpath posé par `build.rs`. Seul le
+pilote NVIDIA est requis. Au build, `MURMURE_CUDA_LIB_DIR` impose le dossier des bibliothèques CUDA utilisé pour l'édition de liens,
+utile quand `/usr/local/cuda` pointe vers une autre version que celle du compilateur.
+Ces bibliothèques sont propriétaires : voir [LICENSE-EXCEPTION-CUDA.md](LICENSE-EXCEPTION-CUDA.md).
+
+**Vulkan** (`--features vulkan`, paquets `…-linux-x64-vulkan`, pas d'AppImage) : rien n'est embarqué. Le
+paquet dépend de `libvulkan1` (.deb) ou de `libvulkan.so.1()(64bit)` (.rpm). Sans pilote Vulkan,
+l'initialisation échoue proprement (`ggml_backend_vk_reg` renvoie un pointeur nul) ; un pilote purement
+logiciel comme lavapipe est ignoré par ggml. Dans les deux cas, la transcription se fait sur le processeur,
+avec un avertissement dans le journal.
+
+Chaque variante a son manifeste (`cuda/latest.json`, `vulkan/latest.json`), pour qu'une installation GPU
+ne bascule jamais vers la variante standard.
 
 ## Wayland (`wayland.rs`, `portal.rs`)
 
-Sous Wayland, `tauri-plugin-global-shortcut` (X11) ne reçoit rien et enigo/xdotool n'atteignent pas les fenêtres
-natives. Murmure passe par les portails XDG (crate `ashpd`, D-Bus pur Rust via `zbus`, runtime tokio de Tauri).
+Sous Wayland, le greffon `tauri-plugin-global-shortcut` (X11) ne reçoit aucune touche et enigo ou xdotool
+n'atteignent pas les fenêtres natives. Murmure passe donc par les portails XDG, avec la crate `ashpd`
+(D-Bus en Rust pur via `zbus`, sur le runtime tokio de Tauri).
 
-- **Détection** : `XDG_SESSION_TYPE=wayland`, ou `WAYLAND_DISPLAY` défini sans `XDG_SESSION_TYPE=x11` explicite.
-  X11, macOS, Windows : rien ne change (plugin global-shortcut, enigo).
-- **App id** : une app hors bac à sable n'en a pas pour le portail (sauf lancée par le bureau dans une unité
-  `app-Murmure@….service`) ; sans app id, KDE crée un composant `token_…` à chaque lancement et redemande le
-  raccourci. Au premier appel, `org.freedesktop.host.portal.Registry.Register("Murmure")` (xdg-desktop-portal ≥ 1.19)
-  sur la connexion partagée ; il exige `Murmure.desktop` (paquets .deb/.rpm), créé dans `~/.local/share/applications`
-  s'il manque (AppImage). Échec = best effort, on continue.
-- **Raccourci** (`org.freedesktop.portal.GlobalShortcuts`, KDE Plasma ≥ 5.27, GNOME ≥ 48) : `CreateSession`, puis
-  `BindShortcuts` d'un raccourci `dictation`, `preferred_trigger` dérivé du réglage
-  (`wayland::accelerator_to_portal` : `Ctrl+Alt+Space` → `CTRL+ALT+space`). KDE n'ouvre sa boîte de dialogue que
-  pour un raccourci nouveau ; l'utilisateur peut y choisir une autre touche. `Activated` → appui, `Deactivated` →
-  relâchement, injectés dans `hotkey::on_key_event` : modes hybride / maintien / bascule identiques à X11.
-  Le raccourci attribué est relu (réponse de `BindShortcuts`, `ListShortcuts` au retour du focus, signal
-  `ShortcutsChanged`) et affiché dans Réglages › Raccourci ; « Modifier… » appelle `ConfigureShortcuts` (v2).
-  Le réglage `hotkey` n'est alors qu'une préférence initiale : `hotkey::apply` n'enregistre rien côté X11 (sinon
-  double appui dans les fenêtres XWayland). Échap n'est pas capté globalement sous Wayland.
-- **Collage** (`org.freedesktop.portal.RemoteDesktop`) : clavier seul, `persist_mode` = 2 (jusqu'à révocation),
-  `restore_token` dans `wayland_restore_token` (à usage unique : remplacé à chaque démarrage de session) → la
-  boîte de dialogue n'apparaît qu'une fois. Ctrl+V = `NotifyKeyboardKeysym` (`Control_L`, `v`), indépendant de la
-  disposition. Session fermée par le bureau → état `inactive`, repli.
-- **Ordre de collage** (`inject::paste_plan`, testé) : portail → `ydotool` (si le socket de `ydotoold` répond) →
-  `wtype` (refusé par KWin) → copie seule + notification du bureau « Texte copié » et message dans la pastille.
-- **Presse-papiers** : `arboard` avec `wayland-data-control` (wl-clipboard-rs : `ext-data-control-v1` et
-  `zwlr-data-control-v1`, KWin et wlroots ; repli X11 via XWayland sinon, ex. GNOME). Le contenu est servi par un
-  thread de fond tant que Murmure tourne : il reste disponible pour le collage et après.
-- **Quand les demandes apparaissent** : au démarrage, le raccourci est rebranché si l'onboarding est terminé (pas
-  de dialogue s'il est déjà accordé) et la session clavier restaurée si un jeton existe. Sinon, bouton « Autoriser
-  Murmure » (onboarding, étape autorisations ; Réglages › Raccourci) → `wayland_authorize`.
-- **Repli** : portail absent ou refusé → `murmure --toggle` lié à un raccourci KDE (procédure affichée dans
-  Réglages › Raccourci). Ce mode est une bascule (pas de relâchement).
-- **Mode démo** : `?wayland` simule une session Wayland, `?wayland=deny` un refus.
+**Détection.** Session Wayland si `XDG_SESSION_TYPE=wayland`, ou si `WAYLAND_DISPLAY` est défini sans
+`XDG_SESSION_TYPE=x11`. Sous X11, macOS et Windows, rien ne change.
+
+**Identifiant d'application.** Une application hors bac à sable n'a pas d'identifiant pour le portail,
+sauf si le bureau l'a lancée dans une unité `app-Murmure@….service`. Sans identifiant, KDE crée un
+composant `token_…` à chaque lancement et redemande le raccourci. Murmure appelle donc
+`org.freedesktop.host.portal.Registry.Register("Murmure")` (xdg-desktop-portal 1.19 ou plus récent), ce qui
+exige un fichier `Murmure.desktop` : il est fourni par les paquets, et créé dans
+`~/.local/share/applications` s'il manque (AppImage). Un échec n'est pas bloquant.
+
+**Raccourci** (`org.freedesktop.portal.GlobalShortcuts`, KDE Plasma 5.27 et GNOME 48 ou plus récents).
+Murmure crée une session et lie un raccourci `dictation`, dont le déclencheur proposé vient du réglage
+(`wayland::accelerator_to_portal` : `Ctrl+Alt+Space` devient `CTRL+ALT+space`). KDE n'affiche sa boîte de
+dialogue que pour un raccourci nouveau. Les signaux `Activated` et `Deactivated` sont transmis à
+`hotkey::on_key_event` : les modes hybride, maintien et bascule se comportent comme sous X11. Le raccourci
+réellement attribué est relu (réponse de `BindShortcuts`, `ListShortcuts` au retour du focus, signal
+`ShortcutsChanged`). Dans ce mode, `hotkey::apply` n'enregistre rien côté X11, sinon les fenêtres XWayland
+recevraient un double appui.
+
+**Collage** (`org.freedesktop.portal.RemoteDesktop`). Session clavier seul, `persist_mode` à 2 (jusqu'à
+révocation) ; le `restore_token`, à usage unique, est renouvelé à chaque session et stocké dans
+`wayland_restore_token`, si bien que la boîte de dialogue n'apparaît qu'une fois. Ctrl+V est envoyé par
+`NotifyKeyboardKeysym` (`Control_L`, `v`), indépendamment de la disposition du clavier. L'ordre de repli
+est fixé par `inject::paste_plan`, testé : portail, puis `ydotool` si le socket de `ydotoold` répond, puis
+`wtype` (refusé par KWin), et enfin copie seule avec une notification « Texte copié ».
+
+**Presse-papiers.** `arboard` avec `wayland-data-control` (`ext-data-control-v1` et
+`zwlr-data-control-v1`, pour KWin et wlroots), avec repli X11 par XWayland ailleurs, par exemple sous
+GNOME. Un thread de fond sert le contenu tant que Murmure tourne.
+
+**Moment des demandes.** Au démarrage, si l'assistant est terminé, le raccourci est rebranché (sans boîte
+de dialogue s'il est déjà accordé) et la session clavier restaurée si un jeton existe. Sinon, les demandes
+partent du bouton « Autoriser Murmure » (assistant et Réglages › Raccourci), via `wayland_authorize`.
+
+**Repli.** Sans portail des raccourcis, ou après un refus, l'utilisateur lie `murmure --toggle` à un
+raccourci du bureau (procédure affichée dans Réglages › Raccourci). Ce mode est une bascule.
 
 ## Ponctuation dictée (`punctuation.rs`)
 
-- Réglage `spoken_punctuation` (défaut : activé), actif si la langue est `fr` ou `auto` : « virgule », « point »,
-  « point à la ligne », « à la ligne », « nouveau paragraphe », « deux points », « point-virgule », « point
-  d'interrogation / d'exclamation », « points de suspension », « ouvrez / fermez les guillemets » (« »),
-  « ouvrez / fermez la parenthèse » deviennent les signes ; typographie française et majuscules recomposées.
-- Garde-fous : « point » seul n'est converti qu'en fin de phrase ou isolé par Whisper entre deux signes, jamais
-  après un déterminant (« caler un point jeudi », « le point de vue ») ; idem « virgule », « deux points ».
-- Langue fixée sur `fr` : un exemple de dictée ponctuée (`PROMPT_FR`) est ajouté au prompt initial de Whisper,
-  sans quoi « deux points » devient « 2. » et « à la ligne » est mal reconnu. Mesure sur corpus :
-  `MURMURE_PUNCT_DIR=… cargo test --release --lib engine::local::tests::corpus_ponctuation -- --ignored --nocapture`.
+Active si `spoken_punctuation` est vrai et que la langue est `fr` ou `auto`. Sont convertis : « virgule »,
+« point », « point à la ligne », « à la ligne », « nouveau paragraphe », « deux points », « point-virgule »,
+« point d'interrogation », « point d'exclamation », « points de suspension », « ouvrez / fermez les
+guillemets », « ouvrez / fermez la parenthèse ». La typographie française et les majuscules sont
+recomposées.
 
-## Flux de dictée
+« Point » seul n'est converti qu'en fin de phrase ou quand Whisper l'a isolé entre deux signes, jamais
+après un déterminant (« caler un point jeudi », « le point de vue ») ; même règle pour « virgule » et
+« deux points ». Avec la langue `fr`, un exemple de dictée ponctuée (`PROMPT_FR`) est ajouté au prompt
+initial de Whisper : sans lui, « deux points » devient « 2. » et « à la ligne » est mal reconnu.
 
-```
-raccourci pressé ─► state=recording, overlay visible, son "start", Recorder::start
-raccourci relâché ─► (hybride : appui < 300 ms → mains libres, on attend un 2e appui)
-                  ─► Recorder::stop ─► state=transcribing
-                  ─► LocalEngine/RemoteEngine::transcribe (thread bloquant / async)
-                  ─► texte nettoyé (trim, espaces) ─► inject::paste(texte) ─► historique
-                  ─► dictation-result, state=idle, overlay masqué
-Échap pendant l'enregistrement ─► cancel_dictation (X11, macOS, Windows)
-Enregistrement < 250 ms ou silence ─► abandon silencieux
-```
+## Interface
 
-## Principes UI
-
-Neutre, calme, typographie système (SF Pro / Inter), une seule couleur d'accent sobre, clair et sombre
-automatiques. La fenêtre principale sert surtout à régler ; l'usage quotidien passe par le raccourci et la pastille.
-Tout le texte de l'interface est en français.
+Interface sobre, typographie du système, une seule couleur d'accent, thèmes clair et sombre automatiques.
+Tous les textes sont en français.

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Moteurs de transcription.
 
 `Engine` est l'interface utilisée par l'API ; `FasterWhisperEngine` est l'implémentation réelle.
