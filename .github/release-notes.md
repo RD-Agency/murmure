@@ -1,9 +1,17 @@
-## Nouveautés de la 0.1.6
+## Nouveautés de la 0.1.7
 
-- **Transcription sur processeur environ dix fois plus rapide** sur les PC sans carte graphique : une
-  dictée courte passe d'environ 2 minutes 30 à une quinzaine de secondes. Un processeur de 2013 ou plus
-  récent est requis pour le moteur local.
-- **Page de téléchargement refaite**, plus claire, avec la bonne commande pour chaque distribution Linux.
+- **Dictées longues fiables** : au-delà de 30 secondes, plus aucun mot perdu, et le texte arrive presque
+  aussitôt après le relâchement, car Murmure transcrit pendant que vous parlez.
+- **Historique complet** : toutes les dictées sont gardées, avec recherche et filtre par dates. L'audio est
+  conservé en format compressé (environ 9 Mo par heure, 5 Go au plus) pour réécouter une dictée.
+- **Corrections** : une dictée se corrige dans l'historique. Les mots corrigés souvent sont proposés pour le
+  vocabulaire, et Murmure corrige seul un mot sur lequel il hésite s'il ressemble à un terme du vocabulaire.
+- **Arrêt automatique** après 2 secondes de silence, en mode bascule.
+- **Mot de validation** facultatif (« terminé », « envoyer ») : Murmure colle le texte puis appuie sur Entrée.
+- **Transcription de fichiers audio** depuis l'accueil (WAV, MP3, M4A, Ogg, Opus, FLAC).
+- **Baisse du volume** de l'ordinateur pendant la dictée, en option.
+- **Textes courts** sans point final ni majuscule imposée.
+- **Export et import des réglages**, pratique pour équiper plusieurs postes.
 
 Le détail des versions est dans le [CHANGELOG](https://github.com/RD-Agency/murmure/blob/main/CHANGELOG.md).
 

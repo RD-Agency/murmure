@@ -1,6 +1,6 @@
 # Historique des versions
 
-## Non publié
+## 0.1.7 — 16 octobre 2026
 
 - Dictées de plus de 30 s : le moteur local ne perd plus de mots à la jonction des fenêtres de
   Whisper (WER de 16,6 % à 9,1 % sur des dictées de 35 à 48 s, RTX 5060). Les dictées plus courtes
