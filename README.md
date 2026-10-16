@@ -166,4 +166,4 @@ N'ouvrez pas d'issue publique.
 ## Contact
 
 Murmure est développé par RD Agency (Rayan Drissi). Pour une question sur le projet, ouvrez une issue ;
-pour un déploiement en entreprise ou une licence commerciale, écrivez à rayan.drissi@icloud.com.
+pour un déploiement en entreprise ou une licence commerciale, écrivez à pro@rayan-drissi.com
