@@ -4,6 +4,7 @@
 export type EngineKind = "local" | "remote";
 export type HotkeyMode = "hybrid" | "hold" | "toggle";
 export type PasteMode = "paste" | "clipboard";
+export type WaylandPasteKeys = "ctrl_v" | "ctrl_v_keycode" | "shift_insert" | "type_text";
 export type Platform = "macos" | "linux" | "windows";
 export type View = "home" | "history" | "settings";
 
@@ -34,6 +35,8 @@ export interface Settings {
   duck_volume: boolean;
   paste_mode: PasteMode;
   restore_clipboard: boolean;
+  /** Linux Wayland : touches envoyées par le portail pour coller. */
+  wayland_paste_keys: WaylandPasteKeys;
   /** Mot de validation : retiré en fin de dictée, puis Entrée après le collage */
   submit_word_enabled: boolean;
   submit_words: string[];

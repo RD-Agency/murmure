@@ -55,6 +55,7 @@ const DEFAULT_SETTINGS: Settings = {
   duck_volume: false,
   paste_mode: "paste",
   restore_clipboard: true,
+  wayland_paste_keys: "ctrl_v",
   submit_word_enabled: false,
   submit_words: ["terminé", "envoyer"],
   sounds: true,

@@ -39,6 +39,22 @@ pub enum PasteMode {
     Clipboard,
 }
 
+/// Linux Wayland : touches envoyées par le portail RemoteDesktop pour coller.
+/// Certaines applications Qt/KDE (KMail, KWrite) ignorent le Ctrl+V simulé par keysym.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WaylandPasteKeys {
+    /// Ctrl+V envoyé par keysym (comportement 0.1.x, délais allongés en 0.1.8).
+    #[default]
+    CtrlV,
+    /// Ctrl+V envoyé par code de touche evdev (indépendant de la disposition du clavier).
+    CtrlVKeycode,
+    /// Maj+Inser (collage historique, accepté par la plupart des applications).
+    ShiftInsert,
+    /// Saisie directe du texte, caractère par caractère, sans presse-papiers.
+    TypeText,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -65,6 +81,8 @@ pub struct Settings {
     pub duck_volume: bool,
     pub paste_mode: PasteMode,
     pub restore_clipboard: bool,
+    /// Linux Wayland : méthode de collage par le portail.
+    pub wayland_paste_keys: WaylandPasteKeys,
     /// Mot de validation : prononcé en fin de dictée, il est retiré et Entrée suit le collage.
     pub submit_word_enabled: bool,
     pub submit_words: Vec<String>,
@@ -128,6 +146,7 @@ impl Default for Settings {
             duck_volume: false,
             paste_mode: PasteMode::Paste,
             restore_clipboard: true,
+            wayland_paste_keys: WaylandPasteKeys::default(),
             submit_word_enabled: false,
             submit_words: default_submit_words(),
             sounds: true,
