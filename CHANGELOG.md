@@ -8,9 +8,11 @@
   sur silence dans cette fenêtre ; le brouillon est conservé si on la ferme.
 - Ponctuation dictée : « point nouveau paragraphe », « point à la ligne », « points de suspension »,
   « guillemets ouvrants / fermants », « trait d'union ». Les deux formes d'apostrophe sont reconnues.
-- Ponctuation ajoutée par Whisper : dès qu'un signe est prononcé dans une dictée, les points et virgules
-  que Whisper avait ajoutés aux pauses sont retirés, avec la majuscule qui suivait (réglable : garder,
-  si je dicte, toujours). Le point final non dicté disparaît aussi.
+- Ponctuation ajoutée par Whisper : seule la ponctuation prononcée est écrite. Les points et virgules
+  que Whisper ajoutait aux pauses sont retirés, avec la majuscule qui suivait, et le point final non dicté
+  disparaît. Réglable dans Réglages › Langue : garder, retirer seulement quand on dicte un signe, ou
+  toujours retirer (par défaut). Pour retrouver l'ancien comportement, choisir « Garder » ou couper la
+  ponctuation dictée.
 - Majuscules : plus de majuscule après une virgule, un point-virgule ou deux-points ; majuscule après un
   retour à la ligne réglable. Les noms propres probables gardent la leur.
 - Table de ponctuation personnelle (« esperluette » → &, « paragraphe » → §…) et fichier d'instructions
