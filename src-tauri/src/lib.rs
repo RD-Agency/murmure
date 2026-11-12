@@ -181,6 +181,53 @@ async fn export_config(app: AppHandle, state: State<'_, AppState>, include_secre
     .map_err(err_str)?
 }
 
+/// Exporte le fichier d'instructions de ponctuation (texte lisible). `None` si l'utilisateur annule.
+#[tauri::command]
+async fn export_punctuation(app: AppHandle, state: State<'_, AppState>) -> CmdResult<Option<String>> {
+    let text = state.settings().punctuation.to_file();
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri_plugin_dialog::DialogExt;
+        let Some(path) = app
+            .dialog()
+            .file()
+            .set_title("Exporter la ponctuation")
+            .set_file_name("murmure-ponctuation.txt")
+            .add_filter("Texte", &["txt"])
+            .blocking_save_file()
+            .and_then(|p| p.into_path().ok())
+        else {
+            return Ok(None);
+        };
+        std::fs::write(&path, text).map_err(|e| format!("Écriture impossible : {e}"))?;
+        Ok(Some(path.to_string_lossy().into_owned()))
+    })
+    .await
+    .map_err(err_str)?
+}
+
+/// Lit un fichier d'instructions de ponctuation choisi par l'utilisateur. `None` s'il annule.
+/// Les règles ne sont pas appliquées ici : le front les enregistre comme tout autre réglage.
+#[tauri::command]
+async fn import_punctuation(app: AppHandle) -> CmdResult<Option<punctuation::Rules>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri_plugin_dialog::DialogExt;
+        let Some(path) = app
+            .dialog()
+            .file()
+            .set_title("Importer la ponctuation")
+            .add_filter("Texte", &["txt", "md"])
+            .blocking_pick_file()
+            .and_then(|p| p.into_path().ok())
+        else {
+            return Ok(None);
+        };
+        let text = std::fs::read_to_string(&path).map_err(|e| format!("Lecture impossible : {e}"))?;
+        punctuation::Rules::from_file(&text).map(Some).map_err(|e| format!("Fichier de ponctuation invalide, {e}"))
+    })
+    .await
+    .map_err(err_str)?
+}
+
 /// Importe un fichier de réglages et l'applique. `None` si l'utilisateur annule.
 #[tauri::command]
 async fn import_config(app: AppHandle, state: State<'_, AppState>) -> CmdResult<Option<Settings>> {
@@ -717,6 +764,8 @@ pub fn run() {
             wayland_refresh,
             export_config,
             import_config,
+            export_punctuation,
+            import_punctuation,
             file_transcription::pick_audio_file,
             file_transcription::transcribe_file,
             file_transcription::cancel_file_transcription,

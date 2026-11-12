@@ -50,6 +50,10 @@ pub struct Settings {
     pub spoken_punctuation: bool,
     /// Textes de trois mots ou moins : ni point final ni majuscule imposée par Whisper.
     pub short_text_plain: bool,
+    /// Règles de la ponctuation dictée : ponctuation de Whisper, majuscules, signes personnels.
+    pub punctuation: crate::punctuation::Rules,
+    /// Taille du texte de l'interface, en pour cent (Ctrl + molette, Ctrl + / Ctrl −).
+    pub ui_zoom: u16,
     pub remote_endpoint: String,
     pub remote_model: String,
     pub hotkey: String,
@@ -84,6 +88,11 @@ pub struct Settings {
 /// Arrêt automatique après deux secondes de silence (bascule et mains libres).
 pub const DEFAULT_AUTO_STOP_MS: u32 = 2000;
 
+/// Zoom de l'interface par défaut, en pour cent (agrandi en 0.1.8 : textes jugés trop petits).
+pub const DEFAULT_UI_ZOOM: u16 = 110;
+/// Bornes du zoom de l'interface.
+pub const UI_ZOOM_RANGE: (u16, u16) = (80, 200);
+
 /// Mots de validation proposés par défaut.
 pub fn default_submit_words() -> Vec<String> {
     vec!["terminé".into(), "envoyer".into()]
@@ -108,6 +117,8 @@ impl Default for Settings {
             initial_prompt: String::new(),
             spoken_punctuation: true,
             short_text_plain: true,
+            punctuation: crate::punctuation::Rules::default(),
+            ui_zoom: DEFAULT_UI_ZOOM,
             remote_endpoint: String::new(),
             remote_model: "whisper-large-v3-turbo".into(),
             hotkey: default_hotkey().into(),

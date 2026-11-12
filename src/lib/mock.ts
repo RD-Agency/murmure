@@ -33,6 +33,19 @@ const DEFAULT_SETTINGS: Settings = {
   initial_prompt: "",
   spoken_punctuation: true,
   short_text_plain: true,
+  punctuation: {
+    whisper_punctuation: "ignore_when_dictated",
+    capitalize_after_newline: true,
+    lowercase_after_comma: true,
+    custom: [
+      { spoken: "esperluette", sign: "&" },
+      { spoken: "arobase", sign: "@" },
+      { spoken: "barre oblique", sign: "/" },
+      { spoken: "ouvrez les crochets", sign: "[" },
+      { spoken: "fermez les crochets", sign: "]" },
+    ],
+  },
+  ui_zoom: 110,
   remote_endpoint: "",
   remote_model: "whisper-large-v3-turbo",
   hotkey: "Alt+Space",
@@ -953,6 +966,8 @@ const impl: Impl = {
   wayland_refresh: () => wayland,
   export_config: ({ includeSecrets }) => exportConfig(includeSecrets),
   import_config: () => importConfig(),
+  export_punctuation: async () => "~/murmure-ponctuation.txt",
+  import_punctuation: async () => null,
   pick_audio_file: () => pickAudioFile(),
   transcribe_file: ({ path }) => transcribeFile(path),
   cancel_file_transcription: () => {

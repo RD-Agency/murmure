@@ -18,6 +18,7 @@ import {
 } from "../components/Icons";
 import { ModelList } from "../components/ModelList";
 import { PageHeader } from "../components/PageHeader";
+import { PunctuationSettings } from "../components/PunctuationSettings";
 import { RemoteForm } from "../components/RemoteForm";
 import { SaveIndicator } from "../components/SaveIndicator";
 import { Segmented } from "../components/Segmented";
@@ -146,6 +147,7 @@ export function Settings() {
                   />
                 </Row>
               )}
+              {settings.spoken_punctuation && (settings.language === "fr" || settings.language === "auto") && <PunctuationSettings />}
               <Row
                 label="Textes courts"
                 htmlFor="short-text"

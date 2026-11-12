@@ -17,6 +17,10 @@ export interface Settings {
   spoken_punctuation: boolean;
   /** Trois mots ou moins : ni point final ni majuscule imposée */
   short_text_plain: boolean;
+  /** Règles de la ponctuation dictée (ponctuation de Whisper, majuscules, signes personnels). */
+  punctuation: PunctuationRules;
+  /** Taille de l'interface en % (Ctrl + molette). */
+  ui_zoom: number;
   remote_endpoint: string;
   remote_model: string;
   /** Format accelerator Tauri, ex. "Alt+Space" */
@@ -47,6 +51,20 @@ export interface Settings {
   onboarding_done: boolean;
   /** Linux Wayland : jeton du portail RemoteDesktop, géré par Rust (ignoré à l'enregistrement). */
   wayland_restore_token: string | null;
+}
+
+export type WhisperPunctuation = "keep" | "ignore_when_dictated" | "ignore";
+
+export interface CustomMark {
+  spoken: string;
+  sign: string;
+}
+
+export interface PunctuationRules {
+  whisper_punctuation: WhisperPunctuation;
+  capitalize_after_newline: boolean;
+  lowercase_after_comma: boolean;
+  custom: CustomMark[];
 }
 
 export interface AudioDevice {
@@ -278,6 +296,8 @@ export interface CommandMap {
   export_config: { args: { includeSecrets: boolean }; ret: string | null };
   /** Réglages appliqués, ou null si l'utilisateur a annulé */
   import_config: { args: undefined; ret: Settings | null };
+  export_punctuation: { args: undefined; ret: string | null };
+  import_punctuation: { args: undefined; ret: PunctuationRules | null };
   pick_audio_file: { args: undefined; ret: string | null };
   transcribe_file: { args: { path: string }; ret: FileTranscript };
   cancel_file_transcription: { args: undefined; ret: void };

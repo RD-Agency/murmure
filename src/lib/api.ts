@@ -117,6 +117,8 @@ export const api = {
   /** Exporte les réglages (boîte d'enregistrement) ; la clé API seulement si demandé. */
   exportConfig: (includeSecrets: boolean) => call("export_config", { includeSecrets }),
   importConfig: () => call("import_config"),
+  exportPunctuation: () => call("export_punctuation"),
+  importPunctuation: () => call("import_punctuation"),
   pickAudioFile: () => call("pick_audio_file"),
   /** Progression par l'événement `file-transcription-progress`. */
   transcribeFile: (path: string) => call("transcribe_file", { path }),
