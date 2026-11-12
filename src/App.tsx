@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useEffect } from "react";
 import { Sidebar } from "./components/Sidebar";
+import { useUiZoom } from "./lib/zoom";
 import { useApp } from "./store";
 import { History } from "./views/History";
 import { Home } from "./views/Home";
@@ -13,6 +14,7 @@ export function App() {
   const view = useApp((s) => s.view);
   const init = useApp((s) => s.init);
   const flush = useApp((s) => s.flushSettings);
+  useUiZoom();
 
   useEffect(() => {
     void init();
