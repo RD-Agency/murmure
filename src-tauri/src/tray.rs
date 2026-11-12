@@ -31,12 +31,13 @@ fn icon(bytes: &'static [u8]) -> Option<Image<'static>> {
 
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let toggle = MenuItem::with_id(app, "toggle", "Démarrer la dictée", true, None::<&str>)?;
+    let dictaphone = MenuItem::with_id(app, "dictaphone", "Dictaphone…", true, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Ouvrir Murmure", true, None::<&str>)?;
     let history = MenuItem::with_id(app, "history", "Historique", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Réglages", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quitter Murmure", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&toggle, &open, &history, &settings, &sep, &quit])?;
+    let menu = Menu::with_items(app, &[&toggle, &dictaphone, &open, &history, &settings, &sep, &quit])?;
 
     let mut builder = tauri::tray::TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
@@ -45,6 +46,11 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "toggle" => pipeline::send(app, Command::Toggle),
+            "dictaphone" => {
+                if let Err(e) = crate::dictaphone::open(app) {
+                    log::warn!("ouverture du dictaphone : {e}");
+                }
+            }
             "open" => show_main(app, None),
             "history" => show_main(app, Some("history")),
             "settings" => show_main(app, Some("settings")),

@@ -522,6 +522,12 @@ function cancelDictation() {
   mockEmit("dictation-state", { state: "idle" });
 }
 
+/** Démo navigateur de la fenêtre dictaphone : le texte va dans la fenêtre au lieu d'être collé. */
+let dictaphoneMode = false;
+export function setDictaphoneMode(on: boolean) {
+  dictaphoneMode = on;
+}
+
 async function stopDictation() {
   if (!dictation) return;
   const d = dictation;
@@ -552,7 +558,8 @@ async function stopDictation() {
     data.history.unshift(entry);
     persist();
   }
-  pasteIntoFocused(text);
+  if (dictaphoneMode) mockEmit("dictaphone-text", { text });
+  else pasteIntoFocused(text);
   mockEmit("dictation-result", entry);
   mockEmit("dictation-state", { state: "idle" });
 }
@@ -969,6 +976,11 @@ const impl: Impl = {
   import_config: () => importConfig(),
   export_punctuation: async () => "~/murmure-ponctuation.txt",
   import_punctuation: async () => null,
+  dictaphone_open: async () => undefined,
+  dictaphone_toggle: () => (dictation ? stopDictation() : startDictation(true)),
+  dictaphone_cancel: async () => undefined,
+  dictaphone_insert: async () => undefined,
+  dictaphone_copy: async () => undefined,
   pick_audio_file: () => pickAudioFile(),
   transcribe_file: ({ path }) => transcribeFile(path),
   cancel_file_transcription: () => {

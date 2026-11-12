@@ -4,11 +4,13 @@ import { Card } from "../components/Card";
 import { EngineStatus, useEngineReady } from "../components/EngineStatus";
 import { FileTranscriber } from "../components/FileTranscriber";
 import { HistoryItem } from "../components/HistoryItem";
-import { IconArrowRight, IconMic } from "../components/Icons";
+import { Button } from "../components/Button";
+import { IconArrowRight, IconMic, IconPause } from "../components/Icons";
 import { InstallCard, useActiveInstall } from "../components/InstallCard";
 import { HotkeyKeys } from "../components/Kbd";
 import { PageHeader } from "../components/PageHeader";
 import { UpdateBanner } from "../components/UpdateBanner";
+import { api } from "../lib/api";
 import { countWords, formatLatency, formatNumber, isSameDay } from "../lib/format";
 import { useApp } from "../store";
 
@@ -76,6 +78,20 @@ export function Home() {
 
           {/* Installation automatique du modèle local */}
           <InstallCard />
+
+          {/* Dictaphone : dicter en plusieurs fois, relire, insérer */}
+          <Card className="flex items-center gap-4 p-5">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent">
+              <IconPause size={17} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-[14px] font-medium text-fg">Dictaphone</div>
+              <p className="text-[12.5px] leading-relaxed text-muted">
+                Pour les textes longs : enregistrez, mettez en pause, ajoutez une phrase n'importe où, puis insérez le tout.
+              </p>
+            </div>
+            <Button onClick={() => void api.dictaphoneOpen()}>Ouvrir</Button>
+          </Card>
 
           {/* Transcription d'un fichier audio */}
           <FileTranscriber />

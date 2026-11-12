@@ -249,6 +249,10 @@ export interface EventMap {
   "update-progress": UpdateProgress;
   "wayland-status": WaylandStatus;
   "file-transcription-progress": FileProgress;
+  /** Dictaphone : texte final d'une dictée, à insérer au curseur. */
+  "dictaphone-text": { text: string };
+  /** Dictaphone : texte déjà transcrit pendant l'enregistrement. */
+  "dictaphone-partial": { text: string };
 }
 
 export type EventName = keyof EventMap;
@@ -300,6 +304,11 @@ export interface CommandMap {
   /** Réglages appliqués, ou null si l'utilisateur a annulé */
   import_config: { args: undefined; ret: Settings | null };
   export_punctuation: { args: undefined; ret: string | null };
+  dictaphone_open: { args: undefined; ret: void };
+  dictaphone_toggle: { args: undefined; ret: void };
+  dictaphone_cancel: { args: undefined; ret: void };
+  dictaphone_insert: { args: { text: string }; ret: void };
+  dictaphone_copy: { args: { text: string }; ret: void };
   import_punctuation: { args: undefined; ret: PunctuationRules | null };
   pick_audio_file: { args: undefined; ret: string | null };
   transcribe_file: { args: { path: string }; ret: FileTranscript };

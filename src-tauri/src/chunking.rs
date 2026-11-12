@@ -469,6 +469,9 @@ fn find_overlap(prev: &[&str], next: &[&str]) -> Option<(usize, usize, usize)> {
 pub type SegmentFn =
     dyn FnMut(&[f32], &TranscribeOptions, &Arc<AtomicBool>) -> Result<engine::Transcript, String> + Send;
 
+/// Rappel facultatif : texte brut assemblé après chaque segment transcrit (affichage en direct).
+pub type PartialFn = dyn FnMut(&str) + Send;
+
 /// Une dictée transcrite au fil de l'enregistrement. L'audio arrive par [`ChunkedSession::sink`]
 /// (thread audio) ; les segments terminés sont transcrits dans l'ordre par un thread de fond ;
 /// [`ChunkedSession::finish`] transcrit le dernier et renvoie le texte brut assemblé, avec la
@@ -524,6 +527,7 @@ impl ChunkedSession {
         opts: TranscribeOptions,
         cancel: Arc<AtomicBool>,
         mut transcribe: Box<SegmentFn>,
+        mut on_partial: Option<Box<PartialFn>>,
     ) -> anyhow::Result<Self> {
         let (tx, rx) = mpsc::channel::<Job>();
         let flag = cancel.clone();
@@ -543,6 +547,9 @@ impl ChunkedSession {
                     started.elapsed().as_millis()
                 );
                 text.push(&part.text, job.overlap);
+                if let Some(f) = on_partial.as_mut() {
+                    f(text.as_str());
+                }
                 // Les mots du recouvrement sont en double : l'alignement de la correction les saute.
                 words.extend(part.words);
             }
@@ -839,7 +846,7 @@ mod tests {
         let audio = signal(&[(true, 16.0), (false, 1.0), (true, 30.0), (false, 0.5)]);
         let (f, calls) = fake(vec!["Bonjour Maître.", "Je vous écris au sujet", "au sujet du dossier."]);
         let base = TranscribeOptions { language: Some("fr".into()), initial_prompt: Some("Vocabulaire.".into()) };
-        let session = ChunkedSession::start(SegmentConfig::default(), base, Arc::default(), f).unwrap();
+        let session = ChunkedSession::start(SegmentConfig::default(), base, Arc::default(), f, None).unwrap();
         let mut sink = session.sink();
         // Le thread audio ne transmet pas les derniers échantillons (vidange du rééchantillonneur).
         let fed = audio.len() - 800;
@@ -860,7 +867,7 @@ mod tests {
     fn session_courte_un_seul_appel() {
         let audio = signal(&[(true, 6.0)]);
         let (f, calls) = fake(vec!["Texte."]);
-        let session = ChunkedSession::start(SegmentConfig::default(), TranscribeOptions::default(), Arc::default(), f).unwrap();
+        let session = ChunkedSession::start(SegmentConfig::default(), TranscribeOptions::default(), Arc::default(), f, None).unwrap();
         session.sink()(&audio);
         assert_eq!(session.finish(&audio).unwrap().text, "Texte.");
         assert_eq!(calls.lock().clone(), vec![(audio.len(), None)]);
@@ -884,7 +891,7 @@ mod tests {
             }
             Ok("trop tard".to_string().into())
         };
-        let session = ChunkedSession::start(SegmentConfig::default(), TranscribeOptions::default(), Arc::default(), Box::new(f)).unwrap();
+        let session = ChunkedSession::start(SegmentConfig::default(), TranscribeOptions::default(), Arc::default(), Box::new(f), None).unwrap();
         session.sink()(&audio);
         assert_eq!(session.segments_sent(), 1);
         while !started.load(Ordering::SeqCst) {

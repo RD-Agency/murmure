@@ -544,6 +544,7 @@ mod tests {
                     opts.clone(),
                     Arc::default(),
                     Box::new(move |s, o, c| eng.transcribe_cancellable(s, o, c.clone()).map_err(|e| e.to_string())),
+                    None,
                 )
                 .unwrap();
                 let mut sink = session.sink();

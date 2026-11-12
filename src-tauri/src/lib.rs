@@ -11,6 +11,7 @@ pub mod settings;
 
 // Modules système
 pub mod correction;
+pub mod dictaphone;
 pub mod history;
 pub mod ducking;
 pub mod hotkey;
@@ -42,7 +43,7 @@ use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_opener::OpenerExt as _;
 
-const MAIN_WINDOW: &str = "main";
+pub(crate) const MAIN_WINDOW: &str = "main";
 /// Argument passé par le lancement automatique : démarrer sans fenêtre.
 const HIDDEN_ARG: &str = "--hidden";
 /// Argument de ligne de commande : bascule la dictée dans l'instance déjà lancée.
@@ -766,6 +767,11 @@ pub fn run() {
             import_config,
             export_punctuation,
             import_punctuation,
+            dictaphone::dictaphone_open,
+            dictaphone::dictaphone_toggle,
+            dictaphone::dictaphone_cancel,
+            dictaphone::dictaphone_insert,
+            dictaphone::dictaphone_copy,
             file_transcription::pick_audio_file,
             file_transcription::transcribe_file,
             file_transcription::cancel_file_transcription,

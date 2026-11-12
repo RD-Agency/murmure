@@ -70,6 +70,10 @@ fn position(app: &AppHandle, w: &WebviewWindow) {
 }
 
 pub fn show(app: &AppHandle) {
+    // Fenêtre dictaphone ouverte : elle affiche déjà l'état (enregistrement, erreurs).
+    if crate::dictaphone::is_active(app) {
+        return;
+    }
     let Some(w) = window(app) else { return };
     position(app, &w);
     #[cfg(target_os = "macos")]
