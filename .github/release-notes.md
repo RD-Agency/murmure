@@ -1,17 +1,14 @@
-## Nouveautés de la 0.1.7
+## Nouveautés de la 0.1.8
 
-- **Dictées longues fiables** : au-delà de 30 secondes, plus aucun mot perdu, et le texte arrive presque
-  aussitôt après le relâchement, car Murmure transcrit pendant que vous parlez.
-- **Historique complet** : toutes les dictées sont gardées, avec recherche et filtre par dates. L'audio est
-  conservé en format compressé (environ 9 Mo par heure, 5 Go au plus) pour réécouter une dictée.
-- **Corrections** : une dictée se corrige dans l'historique. Les mots corrigés souvent sont proposés pour le
-  vocabulaire, et Murmure corrige seul un mot sur lequel il hésite s'il ressemble à un terme du vocabulaire.
-- **Arrêt automatique** après 2 secondes de silence, en mode bascule.
-- **Mot de validation** facultatif (« terminé », « envoyer ») : Murmure colle le texte puis appuie sur Entrée.
-- **Transcription de fichiers audio** depuis l'accueil (WAV, MP3, M4A, Ogg, Opus, FLAC).
-- **Baisse du volume** de l'ordinateur pendant la dictée, en option.
-- **Textes courts** sans point final ni majuscule imposée.
-- **Export et import des réglages**, pratique pour équiper plusieurs postes.
+- **Fenêtre dictaphone** : dictez en plusieurs fois (Enregistrer / Pause), relisez et corrigez le texte,
+  ajoutez une phrase où vous voulez, puis insérez le tout dans votre document.
+- **Ponctuation dictée plus fidèle** : « point nouveau paragraphe », « points de suspension », guillemets ;
+  quand vous dictez la ponctuation, celle que Whisper ajoutait seul aux pauses disparaît.
+- **Plus de majuscule après une virgule**, et majuscule après un retour à la ligne au choix.
+- **Vos propres signes** (« esperluette » → &) et un fichier d'instructions à partager entre confrères.
+- **Zoom de l'interface** avec Ctrl + molette.
+- **Linux Wayland** : collage plus fiable et méthode de collage au choix.
+- **Nouveau modèle large-v3 Q5**, plus précis sur les accords.
 
 Le détail des versions est dans le [CHANGELOG](https://github.com/RD-Agency/murmure/blob/main/CHANGELOG.md).
 
