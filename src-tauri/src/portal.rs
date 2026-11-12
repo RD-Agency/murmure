@@ -553,7 +553,7 @@ pub fn keyboard_ready(app: &AppHandle) -> bool {
 
 /// Événement clavier simulé : par keysym (dépend de la disposition) ou par code evdev.
 #[derive(Clone, Copy, Debug)]
-enum KeyEvent {
+enum PortalKey {
     Sym(i32),
     Code(i32),
 }
@@ -570,11 +570,11 @@ const PASTE_PRELUDE: Duration = Duration::from_millis(120);
 const TYPE_GAP: Duration = Duration::from_millis(4);
 
 /// Touches du collage selon le réglage : (modificateur, touche).
-fn paste_combo(keys: WaylandPasteKeys) -> (KeyEvent, KeyEvent) {
+fn paste_combo(keys: WaylandPasteKeys) -> (PortalKey, PortalKey) {
     match keys {
-        WaylandPasteKeys::CtrlVKeycode => (KeyEvent::Code(KEY_LEFTCTRL), KeyEvent::Code(KEY_V)),
-        WaylandPasteKeys::ShiftInsert => (KeyEvent::Sym(XK_SHIFT_L), KeyEvent::Sym(XK_INSERT)),
-        WaylandPasteKeys::CtrlV | WaylandPasteKeys::TypeText => (KeyEvent::Sym(XK_CONTROL_L), KeyEvent::Sym(XK_V)),
+        WaylandPasteKeys::CtrlVKeycode => (PortalKey::Code(KEY_LEFTCTRL), PortalKey::Code(KEY_V)),
+        WaylandPasteKeys::ShiftInsert => (PortalKey::Sym(XK_SHIFT_L), PortalKey::Sym(XK_INSERT)),
+        WaylandPasteKeys::CtrlV | WaylandPasteKeys::TypeText => (PortalKey::Sym(XK_CONTROL_L), PortalKey::Sym(XK_V)),
     }
 }
 
@@ -588,10 +588,10 @@ pub fn keysym_for(c: char) -> i32 {
     }
 }
 
-async fn send_key(k: &KeyboardSession, ev: KeyEvent, state: KeyState) -> Result<(), String> {
+async fn send_key(k: &KeyboardSession, ev: PortalKey, state: KeyState) -> Result<(), String> {
     let res = match ev {
-        KeyEvent::Sym(sym) => k.proxy.notify_keyboard_keysym(&k.session, sym, state, Default::default()).await,
-        KeyEvent::Code(code) => k.proxy.notify_keyboard_keycode(&k.session, code, state, Default::default()).await,
+        PortalKey::Sym(sym) => k.proxy.notify_keyboard_keysym(&k.session, sym, state, Default::default()).await,
+        PortalKey::Code(code) => k.proxy.notify_keyboard_keycode(&k.session, code, state, Default::default()).await,
     };
     match &res {
         Ok(()) => log::debug!("portail : {ev:x?} {state:?} → ok"),
@@ -657,7 +657,7 @@ async fn type_text(app: &AppHandle, text: &str) -> Result<(), String> {
     let started = std::time::Instant::now();
     tokio::time::sleep(PASTE_PRELUDE).await;
     for c in text.chars() {
-        let ev = KeyEvent::Sym(keysym_for(c));
+        let ev = PortalKey::Sym(keysym_for(c));
         send_key(k, ev, KeyState::Pressed).await?;
         tokio::time::sleep(TYPE_GAP).await;
         send_key(k, ev, KeyState::Released).await?;
@@ -725,8 +725,8 @@ mod tests {
 
     #[test]
     fn combinaisons_de_collage() {
-        assert!(matches!(paste_combo(WaylandPasteKeys::CtrlV), (KeyEvent::Sym(XK_CONTROL_L), KeyEvent::Sym(XK_V))));
-        assert!(matches!(paste_combo(WaylandPasteKeys::CtrlVKeycode), (KeyEvent::Code(29), KeyEvent::Code(47))));
-        assert!(matches!(paste_combo(WaylandPasteKeys::ShiftInsert), (KeyEvent::Sym(XK_SHIFT_L), KeyEvent::Sym(XK_INSERT))));
+        assert!(matches!(paste_combo(WaylandPasteKeys::CtrlV), (PortalKey::Sym(XK_CONTROL_L), PortalKey::Sym(XK_V))));
+        assert!(matches!(paste_combo(WaylandPasteKeys::CtrlVKeycode), (PortalKey::Code(29), PortalKey::Code(47))));
+        assert!(matches!(paste_combo(WaylandPasteKeys::ShiftInsert), (PortalKey::Sym(XK_SHIFT_L), PortalKey::Sym(XK_INSERT))));
     }
 }
