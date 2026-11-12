@@ -92,6 +92,13 @@ const CATALOG: Omit<ModelInfo, "downloaded" | "path">[] = [
     recommended: false,
   },
   {
+    id: "large-v3-q5_0",
+    name: "Whisper large-v3 (q5)",
+    description: "Accords et pluriels plus justes, environ trois fois plus lent que turbo.",
+    size_mb: 1031,
+    recommended: false,
+  },
+  {
     id: "small",
     name: "Whisper small",
     description: "Rapide et compact, moins précis sur les noms propres.",

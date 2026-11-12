@@ -99,7 +99,7 @@ export function PunctuationSettings() {
           value={rules.whisper_punctuation}
           options={WHISPER_OPTIONS}
           onChange={(whisper_punctuation) => set({ whisper_punctuation })}
-          className="w-[260px]"
+          className="w-[300px] whitespace-nowrap"
         />
       </Row>
       <Row
