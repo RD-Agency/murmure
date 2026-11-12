@@ -11,6 +11,7 @@ pub mod settings;
 
 // Modules système
 pub mod correction;
+pub mod dictaphone;
 pub mod history;
 pub mod ducking;
 pub mod hotkey;
@@ -42,7 +43,7 @@ use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_opener::OpenerExt as _;
 
-const MAIN_WINDOW: &str = "main";
+pub(crate) const MAIN_WINDOW: &str = "main";
 /// Argument passé par le lancement automatique : démarrer sans fenêtre.
 const HIDDEN_ARG: &str = "--hidden";
 /// Argument de ligne de commande : bascule la dictée dans l'instance déjà lancée.
@@ -176,6 +177,53 @@ async fn export_config(app: AppHandle, state: State<'_, AppState>, include_secre
         config_transfer::write(&path, &file)?;
         log::info!("réglages exportés dans {}", path.display());
         Ok(Some(path.to_string_lossy().into_owned()))
+    })
+    .await
+    .map_err(err_str)?
+}
+
+/// Exporte le fichier d'instructions de ponctuation (texte lisible). `None` si l'utilisateur annule.
+#[tauri::command]
+async fn export_punctuation(app: AppHandle, state: State<'_, AppState>) -> CmdResult<Option<String>> {
+    let text = state.settings().punctuation.to_file();
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri_plugin_dialog::DialogExt;
+        let Some(path) = app
+            .dialog()
+            .file()
+            .set_title("Exporter la ponctuation")
+            .set_file_name("murmure-ponctuation.txt")
+            .add_filter("Texte", &["txt"])
+            .blocking_save_file()
+            .and_then(|p| p.into_path().ok())
+        else {
+            return Ok(None);
+        };
+        std::fs::write(&path, text).map_err(|e| format!("Écriture impossible : {e}"))?;
+        Ok(Some(path.to_string_lossy().into_owned()))
+    })
+    .await
+    .map_err(err_str)?
+}
+
+/// Lit un fichier d'instructions de ponctuation choisi par l'utilisateur. `None` s'il annule.
+/// Les règles ne sont pas appliquées ici : le front les enregistre comme tout autre réglage.
+#[tauri::command]
+async fn import_punctuation(app: AppHandle) -> CmdResult<Option<punctuation::Rules>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri_plugin_dialog::DialogExt;
+        let Some(path) = app
+            .dialog()
+            .file()
+            .set_title("Importer la ponctuation")
+            .add_filter("Texte", &["txt", "md"])
+            .blocking_pick_file()
+            .and_then(|p| p.into_path().ok())
+        else {
+            return Ok(None);
+        };
+        let text = std::fs::read_to_string(&path).map_err(|e| format!("Lecture impossible : {e}"))?;
+        punctuation::Rules::from_file(&text).map(Some).map_err(|e| format!("Fichier de ponctuation invalide, {e}"))
     })
     .await
     .map_err(err_str)?
@@ -717,6 +765,13 @@ pub fn run() {
             wayland_refresh,
             export_config,
             import_config,
+            export_punctuation,
+            import_punctuation,
+            dictaphone::dictaphone_open,
+            dictaphone::dictaphone_toggle,
+            dictaphone::dictaphone_cancel,
+            dictaphone::dictaphone_insert,
+            dictaphone::dictaphone_copy,
             file_transcription::pick_audio_file,
             file_transcription::transcribe_file,
             file_transcription::cancel_file_transcription,

@@ -4,6 +4,7 @@
 export type EngineKind = "local" | "remote";
 export type HotkeyMode = "hybrid" | "hold" | "toggle";
 export type PasteMode = "paste" | "clipboard";
+export type WaylandPasteKeys = "ctrl_v" | "ctrl_v_keycode" | "shift_insert" | "type_text";
 export type Platform = "macos" | "linux" | "windows";
 export type View = "home" | "history" | "settings";
 
@@ -17,6 +18,10 @@ export interface Settings {
   spoken_punctuation: boolean;
   /** Trois mots ou moins : ni point final ni majuscule imposée */
   short_text_plain: boolean;
+  /** Règles de la ponctuation dictée (ponctuation de Whisper, majuscules, signes personnels). */
+  punctuation: PunctuationRules;
+  /** Taille de l'interface en % (Ctrl + molette). */
+  ui_zoom: number;
   remote_endpoint: string;
   remote_model: string;
   /** Format accelerator Tauri, ex. "Alt+Space" */
@@ -30,6 +35,8 @@ export interface Settings {
   duck_volume: boolean;
   paste_mode: PasteMode;
   restore_clipboard: boolean;
+  /** Linux Wayland : touches envoyées par le portail pour coller. */
+  wayland_paste_keys: WaylandPasteKeys;
   /** Mot de validation : retiré en fin de dictée, puis Entrée après le collage */
   submit_word_enabled: boolean;
   submit_words: string[];
@@ -47,6 +54,20 @@ export interface Settings {
   onboarding_done: boolean;
   /** Linux Wayland : jeton du portail RemoteDesktop, géré par Rust (ignoré à l'enregistrement). */
   wayland_restore_token: string | null;
+}
+
+export type WhisperPunctuation = "keep" | "ignore_when_dictated" | "ignore";
+
+export interface CustomMark {
+  spoken: string;
+  sign: string;
+}
+
+export interface PunctuationRules {
+  whisper_punctuation: WhisperPunctuation;
+  capitalize_after_newline: boolean;
+  lowercase_after_comma: boolean;
+  custom: CustomMark[];
 }
 
 export interface AudioDevice {
@@ -228,6 +249,10 @@ export interface EventMap {
   "update-progress": UpdateProgress;
   "wayland-status": WaylandStatus;
   "file-transcription-progress": FileProgress;
+  /** Dictaphone : texte final d'une dictée, à insérer au curseur. */
+  "dictaphone-text": { text: string };
+  /** Dictaphone : texte déjà transcrit pendant l'enregistrement. */
+  "dictaphone-partial": { text: string };
 }
 
 export type EventName = keyof EventMap;
@@ -278,6 +303,13 @@ export interface CommandMap {
   export_config: { args: { includeSecrets: boolean }; ret: string | null };
   /** Réglages appliqués, ou null si l'utilisateur a annulé */
   import_config: { args: undefined; ret: Settings | null };
+  export_punctuation: { args: undefined; ret: string | null };
+  dictaphone_open: { args: undefined; ret: void };
+  dictaphone_toggle: { args: undefined; ret: void };
+  dictaphone_cancel: { args: undefined; ret: void };
+  dictaphone_insert: { args: { text: string }; ret: void };
+  dictaphone_copy: { args: { text: string }; ret: void };
+  import_punctuation: { args: undefined; ret: PunctuationRules | null };
   pick_audio_file: { args: undefined; ret: string | null };
   transcribe_file: { args: { path: string }; ret: FileTranscript };
   cancel_file_transcription: { args: undefined; ret: void };

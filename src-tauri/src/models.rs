@@ -74,6 +74,16 @@ const CATALOG: &[CatalogEntry] = &[
         recommended: false,
     },
     CatalogEntry {
+        id: "large-v3-q5_0",
+        file: "ggml-large-v3-q5_0.bin",
+        name: "Whisper large-v3 (Q5)",
+        description: "Modèle large-v3 complet (32 couches de décodage) : meilleurs accords et pluriels, \
+                      environ 3 fois plus lent que turbo. Carte graphique conseillée.",
+        size_bytes: 1_081_140_203,
+        sha256: "d75795ecff3f83b5faa89d1900604ad8c780abd5739fae406de19f23ecd98ad1",
+        recommended: false,
+    },
+    CatalogEntry {
         id: "small-q5_1",
         file: "ggml-small-q5_1.bin",
         name: "Whisper small (Q5)",

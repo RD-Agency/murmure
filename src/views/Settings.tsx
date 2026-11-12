@@ -18,6 +18,7 @@ import {
 } from "../components/Icons";
 import { ModelList } from "../components/ModelList";
 import { PageHeader } from "../components/PageHeader";
+import { PunctuationSettings } from "../components/PunctuationSettings";
 import { RemoteForm } from "../components/RemoteForm";
 import { SaveIndicator } from "../components/SaveIndicator";
 import { Segmented } from "../components/Segmented";
@@ -27,7 +28,7 @@ import { UpdateRow } from "../components/UpdateBanner";
 import { useWayland, WaylandPanel } from "../components/WaylandPanel";
 import { api, errorMessage } from "../lib/api";
 import { LANGUAGES } from "../lib/format";
-import type { AudioDevice, HotkeyMode, Platform } from "../lib/types";
+import type { AudioDevice, HotkeyMode, Platform, WaylandPasteKeys } from "../lib/types";
 import { useApp } from "../store";
 
 const MODES: { value: HotkeyMode; title: string; text: string; recommended?: boolean }[] = [
@@ -146,6 +147,7 @@ export function Settings() {
                   />
                 </Row>
               )}
+              {settings.spoken_punctuation && (settings.language === "fr" || settings.language === "auto") && <PunctuationSettings />}
               <Row
                 label="Textes courts"
                 htmlFor="short-text"
@@ -309,6 +311,25 @@ export function Settings() {
                   ]}
                 />
               </Row>
+              {wayland && settings.paste_mode === "paste" && (
+                <Row
+                  label="Méthode de collage (Wayland)"
+                  htmlFor="wayland-paste"
+                  description="Si le texte n'arrive pas dans une application (KMail, KWrite…), essayez une autre méthode. La saisie directe tape le texte sans passer par le presse-papiers."
+                >
+                  <Select
+                    id="wayland-paste"
+                    value={settings.wayland_paste_keys}
+                    onChange={(e) => update({ wayland_paste_keys: e.target.value as WaylandPasteKeys })}
+                    className="w-[210px]"
+                  >
+                    <option value="ctrl_v">Ctrl+V (par défaut)</option>
+                    <option value="ctrl_v_keycode">Ctrl+V par code de touche</option>
+                    <option value="shift_insert">Maj+Inser</option>
+                    <option value="type_text">Saisie directe du texte</option>
+                  </Select>
+                </Row>
+              )}
               <Row
                 label="Restaurer le presse-papiers"
                 htmlFor="restore-clipboard"

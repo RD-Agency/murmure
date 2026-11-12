@@ -33,6 +33,19 @@ const DEFAULT_SETTINGS: Settings = {
   initial_prompt: "",
   spoken_punctuation: true,
   short_text_plain: true,
+  punctuation: {
+    whisper_punctuation: "ignore_when_dictated",
+    capitalize_after_newline: true,
+    lowercase_after_comma: true,
+    custom: [
+      { spoken: "esperluette", sign: "&" },
+      { spoken: "arobase", sign: "@" },
+      { spoken: "barre oblique", sign: "/" },
+      { spoken: "ouvrez les crochets", sign: "[" },
+      { spoken: "fermez les crochets", sign: "]" },
+    ],
+  },
+  ui_zoom: 110,
   remote_endpoint: "",
   remote_model: "whisper-large-v3-turbo",
   hotkey: "Alt+Space",
@@ -42,6 +55,7 @@ const DEFAULT_SETTINGS: Settings = {
   duck_volume: false,
   paste_mode: "paste",
   restore_clipboard: true,
+  wayland_paste_keys: "ctrl_v",
   submit_word_enabled: false,
   submit_words: ["terminé", "envoyer"],
   sounds: true,
@@ -75,6 +89,13 @@ const CATALOG: Omit<ModelInfo, "downloaded" | "path">[] = [
     name: "Whisper large-v3-turbo",
     description: "Modèle complet en pleine précision. Pour les machines très bien dotées.",
     size_mb: 1624,
+    recommended: false,
+  },
+  {
+    id: "large-v3-q5_0",
+    name: "Whisper large-v3 (q5)",
+    description: "Accords et pluriels plus justes, environ trois fois plus lent que turbo.",
+    size_mb: 1031,
     recommended: false,
   },
   {
@@ -508,6 +529,12 @@ function cancelDictation() {
   mockEmit("dictation-state", { state: "idle" });
 }
 
+/** Démo navigateur de la fenêtre dictaphone : le texte va dans la fenêtre au lieu d'être collé. */
+let dictaphoneMode = false;
+export function setDictaphoneMode(on: boolean) {
+  dictaphoneMode = on;
+}
+
 async function stopDictation() {
   if (!dictation) return;
   const d = dictation;
@@ -538,7 +565,8 @@ async function stopDictation() {
     data.history.unshift(entry);
     persist();
   }
-  pasteIntoFocused(text);
+  if (dictaphoneMode) mockEmit("dictaphone-text", { text });
+  else pasteIntoFocused(text);
   mockEmit("dictation-result", entry);
   mockEmit("dictation-state", { state: "idle" });
 }
@@ -953,6 +981,13 @@ const impl: Impl = {
   wayland_refresh: () => wayland,
   export_config: ({ includeSecrets }) => exportConfig(includeSecrets),
   import_config: () => importConfig(),
+  export_punctuation: async () => "~/murmure-ponctuation.txt",
+  import_punctuation: async () => null,
+  dictaphone_open: async () => undefined,
+  dictaphone_toggle: () => (dictation ? stopDictation() : startDictation(true)),
+  dictaphone_cancel: async () => undefined,
+  dictaphone_insert: async () => undefined,
+  dictaphone_copy: async () => undefined,
   pick_audio_file: () => pickAudioFile(),
   transcribe_file: ({ path }) => transcribeFile(path),
   cancel_file_transcription: () => {

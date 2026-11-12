@@ -95,7 +95,33 @@ pub fn deliver(app: &AppHandle, text: &str, mode: PasteMode, restore: bool, subm
     }
 }
 
+/// Réglage de collage Wayland courant.
+#[cfg(target_os = "linux")]
+fn wayland_paste_keys(app: &AppHandle) -> crate::settings::WaylandPasteKeys {
+    use tauri::Manager;
+    app.try_state::<crate::state::AppState>().map(|s| s.settings().wayland_paste_keys).unwrap_or_default()
+}
+
 fn paste(app: &AppHandle, text: &str, restore: bool, submit: bool) -> Result<Outcome, String> {
+    // Saisie directe (Wayland, portail) : ni presse-papiers ni raccourci de collage.
+    #[cfg(target_os = "linux")]
+    if is_wayland()
+        && wayland_paste_keys(app) == crate::settings::WaylandPasteKeys::TypeText
+        && crate::portal::keyboard_ready(app)
+    {
+        match crate::portal::type_blocking(app, text) {
+            Ok(()) => {
+                if submit {
+                    std::thread::sleep(SUBMIT_DELAY);
+                    if let Err(e) = send_keys(app, Keys::Enter) {
+                        log::warn!("mot de validation : Entrée non envoyée ({e})");
+                    }
+                }
+                return Ok(Outcome::Pasted);
+            }
+            Err(e) => log::warn!("saisie directe impossible ({e}) : repli sur le collage"),
+        }
+    }
     let previous = if restore { read_clipboard_text() } else { None };
     copy_to_clipboard(text)?;
     std::thread::sleep(SETTLE_DELAY);
@@ -309,7 +335,7 @@ fn keys_wayland(app: &AppHandle, keys: Keys) -> Result<(), String> {
         let res = match method {
             #[cfg(target_os = "linux")]
             PasteMethod::Portal => match keys {
-                Keys::Paste => crate::portal::paste_blocking(app),
+                Keys::Paste => crate::portal::paste_blocking(app, wayland_paste_keys(app)),
                 Keys::Enter => crate::portal::enter_blocking(app),
             },
             PasteMethod::Ydotool => run_tool("ydotool", tool_args(method, keys)),
@@ -318,10 +344,10 @@ fn keys_wayland(app: &AppHandle, keys: Keys) -> Result<(), String> {
         };
         match res {
             Ok(()) => {
-                log::debug!("{keys:?} sous Wayland via {method:?}");
+                log::info!("{keys:?} sous Wayland via {method:?}");
                 return Ok(());
             }
-            Err(e) => log::debug!("{keys:?} sous Wayland via {method:?} : {e}"),
+            Err(e) => log::warn!("{keys:?} sous Wayland via {method:?} : {e}"),
         }
     }
     if keys == Keys::Enter {

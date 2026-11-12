@@ -39,6 +39,22 @@ pub enum PasteMode {
     Clipboard,
 }
 
+/// Linux Wayland : touches envoyées par le portail RemoteDesktop pour coller.
+/// Certaines applications Qt/KDE (KMail, KWrite) ignorent le Ctrl+V simulé par keysym.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WaylandPasteKeys {
+    /// Ctrl+V envoyé par keysym (comportement 0.1.x, délais allongés en 0.1.8).
+    #[default]
+    CtrlV,
+    /// Ctrl+V envoyé par code de touche evdev (indépendant de la disposition du clavier).
+    CtrlVKeycode,
+    /// Maj+Inser (collage historique, accepté par la plupart des applications).
+    ShiftInsert,
+    /// Saisie directe du texte, caractère par caractère, sans presse-papiers.
+    TypeText,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -50,6 +66,10 @@ pub struct Settings {
     pub spoken_punctuation: bool,
     /// Textes de trois mots ou moins : ni point final ni majuscule imposée par Whisper.
     pub short_text_plain: bool,
+    /// Règles de la ponctuation dictée : ponctuation de Whisper, majuscules, signes personnels.
+    pub punctuation: crate::punctuation::Rules,
+    /// Taille du texte de l'interface, en pour cent (Ctrl + molette, Ctrl + / Ctrl −).
+    pub ui_zoom: u16,
     pub remote_endpoint: String,
     pub remote_model: String,
     pub hotkey: String,
@@ -61,6 +81,8 @@ pub struct Settings {
     pub duck_volume: bool,
     pub paste_mode: PasteMode,
     pub restore_clipboard: bool,
+    /// Linux Wayland : méthode de collage par le portail.
+    pub wayland_paste_keys: WaylandPasteKeys,
     /// Mot de validation : prononcé en fin de dictée, il est retiré et Entrée suit le collage.
     pub submit_word_enabled: bool,
     pub submit_words: Vec<String>,
@@ -83,6 +105,11 @@ pub struct Settings {
 
 /// Arrêt automatique après deux secondes de silence (bascule et mains libres).
 pub const DEFAULT_AUTO_STOP_MS: u32 = 2000;
+
+/// Zoom de l'interface par défaut, en pour cent (agrandi en 0.1.8 : textes jugés trop petits).
+pub const DEFAULT_UI_ZOOM: u16 = 110;
+/// Bornes du zoom de l'interface.
+pub const UI_ZOOM_RANGE: (u16, u16) = (80, 200);
 
 /// Mots de validation proposés par défaut.
 pub fn default_submit_words() -> Vec<String> {
@@ -108,6 +135,8 @@ impl Default for Settings {
             initial_prompt: String::new(),
             spoken_punctuation: true,
             short_text_plain: true,
+            punctuation: crate::punctuation::Rules::default(),
+            ui_zoom: DEFAULT_UI_ZOOM,
             remote_endpoint: String::new(),
             remote_model: "whisper-large-v3-turbo".into(),
             hotkey: default_hotkey().into(),
@@ -117,6 +146,7 @@ impl Default for Settings {
             duck_volume: false,
             paste_mode: PasteMode::Paste,
             restore_clipboard: true,
+            wayland_paste_keys: WaylandPasteKeys::default(),
             submit_word_enabled: false,
             submit_words: default_submit_words(),
             sounds: true,

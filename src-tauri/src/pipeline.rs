@@ -202,7 +202,9 @@ fn start(app: &AppHandle, hands_free: bool) {
     // Baisse du volume : rétabli quand la capture se termine (arrêt, annulation, erreur), car le
     // `Duck` vit dans cette fonction, détenue par le thread audio.
     let duck = settings.duck_volume.then(|| crate::ducking::Duck::start(&state.config_dir));
-    let auto_stop = AutoStop::new(settings.auto_stop_silence_ms);
+    // Dictaphone : on réfléchit entre deux phrases, pas d'arrêt automatique sur silence.
+    let dictaphone = crate::dictaphone::is_active(app);
+    let auto_stop = AutoStop::new(if dictaphone { 0 } else { settings.auto_stop_silence_ms });
     let on_level = move |level: f32| {
         let _volume = &duck;
         auto_stop.feed(&level_app, level);
@@ -299,6 +301,7 @@ fn chunking_enabled() -> bool {
 /// Démarre la transcription au fil de l'enregistrement avec le moteur local.
 fn start_segments(app: &AppHandle, settings: &Settings, cancel: Arc<AtomicBool>) -> Option<ChunkedSession> {
     let (opts, _) = transcribe_options(settings);
+    let app_for_partial = app.clone();
     let app = app.clone();
     let id = settings.local_model.clone();
     let transcribe: Box<SegmentFn> = Box::new(move |samples, opts, cancel| {
@@ -308,7 +311,23 @@ fn start_segments(app: &AppHandle, settings: &Settings, cancel: Arc<AtomicBool>)
             .map_err(|e| format!("Échec de la transcription : {e}"))
     });
     let cfg = SegmentConfig::for_engine(crate::engine::local::gpu_available());
-    ChunkedSession::start(cfg, opts, cancel, transcribe)
+    // Dictaphone : le texte déjà transcrit s'affiche pendant l'enregistrement.
+    let partial_app = app_for_partial;
+    let partial_settings = settings.clone();
+    let on_partial: Box<crate::chunking::PartialFn> = Box::new(move |raw: &str| {
+        if crate::dictaphone::is_active(&partial_app) {
+            let (_, spoken) = transcribe_options(&partial_settings);
+            let opts = crate::postprocess::Options {
+                spoken_punctuation: spoken,
+                short_text_plain: false,
+                submit_words: &[],
+                vocabulary: &partial_settings.initial_prompt,
+                punctuation: Some(&partial_settings.punctuation),
+            };
+            crate::dictaphone::push_partial(&partial_app, &crate::postprocess::finalize(raw, &opts).text);
+        }
+    });
+    ChunkedSession::start(cfg, opts, cancel, transcribe, Some(on_partial))
         .inspect_err(|e| log::warn!("transcription par segments indisponible : {e}"))
         .ok()
 }
@@ -508,6 +527,24 @@ async fn transcribe_and_deliver(
     };
     let (text, submit) = (processed.text.clone(), processed.submit);
     if text.is_empty() && !submit {
+        finish_idle(&app, generation, None);
+        return;
+    }
+
+    // Dictaphone ouvert : le texte va dans la fenêtre (inséré au curseur), pas dans l'application.
+    if crate::dictaphone::is_active(&app) && !text.is_empty() {
+        crate::dictaphone::push_text(&app, &text);
+        let dictation = NewDictation {
+            raw_text: processed.raw_text,
+            final_text: text,
+            duration_ms,
+            latency_ms,
+            engine: settings.engine,
+            model,
+            language: settings.language.trim().to_string(),
+            auto_corrections: processed.auto_corrections,
+        };
+        history::record(&app, &settings, dictation, samples);
         finish_idle(&app, generation, None);
         return;
     }

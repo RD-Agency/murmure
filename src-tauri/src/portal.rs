@@ -32,6 +32,7 @@ use ashpd::zbus;
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::time::Duration;
+use crate::settings::WaylandPasteKeys;
 use tauri::{AppHandle, Manager};
 use tokio::sync::{Mutex, OnceCell};
 
@@ -42,8 +43,9 @@ const SHORTCUT_DESCRIPTION: &str = "Dicter avec Murmure (maintenir ou appuyer)";
 const XK_CONTROL_L: i32 = 0xffe3;
 const XK_V: i32 = 0x0076;
 const XK_RETURN: i32 = 0xff0d;
-/// Délai entre deux événements clavier simulés.
-const KEY_GAP: Duration = Duration::from_millis(12);
+/// Délai entre deux événements clavier simulés (12 ms en 0.1.x : trop court pour certaines
+/// applications Qt sous KWin).
+const KEY_GAP: Duration = Duration::from_millis(30);
 /// Délai maximal pour un appel « rapide » (hors boîtes de dialogue).
 const CALL_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -549,39 +551,120 @@ pub fn keyboard_ready(app: &AppHandle) -> bool {
     wayland::status(app).keyboard == PortalState::Active
 }
 
-/// Envoie Ctrl+V par le portail. Bloquant : à appeler hors du runtime async (`spawn_blocking`).
-pub fn paste_blocking(app: &AppHandle) -> Result<(), String> {
+/// Événement clavier simulé : par keysym (dépend de la disposition) ou par code evdev.
+#[derive(Clone, Copy, Debug)]
+enum PortalKey {
+    Sym(i32),
+    Code(i32),
+}
+
+const XK_SHIFT_L: i32 = 0xffe1;
+const XK_INSERT: i32 = 0xff63;
+/// Codes evdev (linux/input-event-codes.h).
+const KEY_LEFTCTRL: i32 = 29;
+const KEY_V: i32 = 47;
+/// Attente avant le premier événement : l'application cible reçoit d'abord le nouveau contenu du
+/// presse-papiers (offre Wayland) et les touches du raccourci de dictée sont relâchées.
+const PASTE_PRELUDE: Duration = Duration::from_millis(120);
+/// Délai entre deux caractères en saisie directe.
+const TYPE_GAP: Duration = Duration::from_millis(4);
+
+/// Touches du collage selon le réglage : (modificateur, touche).
+fn paste_combo(keys: WaylandPasteKeys) -> (PortalKey, PortalKey) {
+    match keys {
+        WaylandPasteKeys::CtrlVKeycode => (PortalKey::Code(KEY_LEFTCTRL), PortalKey::Code(KEY_V)),
+        WaylandPasteKeys::ShiftInsert => (PortalKey::Sym(XK_SHIFT_L), PortalKey::Sym(XK_INSERT)),
+        WaylandPasteKeys::CtrlV | WaylandPasteKeys::TypeText => (PortalKey::Sym(XK_CONTROL_L), PortalKey::Sym(XK_V)),
+    }
+}
+
+/// Keysym X11 d'un caractère (Latin-1 : le code lui-même ; au-delà : 0x01000000 + code).
+pub fn keysym_for(c: char) -> i32 {
+    match c {
+        '\n' => XK_RETURN,
+        '\t' => 0xff09,
+        c if (c as u32) < 0x100 => c as i32,
+        c => 0x0100_0000 | c as i32,
+    }
+}
+
+async fn send_key(k: &KeyboardSession, ev: PortalKey, state: KeyState) -> Result<(), String> {
+    let res = match ev {
+        PortalKey::Sym(sym) => k.proxy.notify_keyboard_keysym(&k.session, sym, state, Default::default()).await,
+        PortalKey::Code(code) => k.proxy.notify_keyboard_keycode(&k.session, code, state, Default::default()).await,
+    };
+    match &res {
+        Ok(()) => log::debug!("portail : {ev:x?} {state:?} → ok"),
+        Err(e) => log::warn!("portail : {ev:x?} {state:?} → {}", describe(e)),
+    }
+    res.map_err(|e| format!("Collage via le portail impossible : {}", describe(&e)))
+}
+
+/// Envoie la combinaison de collage par le portail. Bloquant : à appeler hors du runtime async
+/// (`spawn_blocking`).
+pub fn paste_blocking(app: &AppHandle, keys: WaylandPasteKeys) -> Result<(), String> {
     let app = app.clone();
     tauri::async_runtime::block_on(async move {
-        tokio::time::timeout(CALL_TIMEOUT, paste(&app))
+        tokio::time::timeout(CALL_TIMEOUT, paste(&app, keys))
             .await
             .map_err(|_| "Délai dépassé pendant le collage via le portail".to_string())?
     })
 }
 
-async fn paste(app: &AppHandle) -> Result<(), String> {
+async fn paste(app: &AppHandle, keys: WaylandPasteKeys) -> Result<(), String> {
     let p = portals(app);
     let guard = p.keyboard.lock().await;
     let Some(k) = guard.as_ref() else {
         return Err("Contrôle du clavier non autorisé".into());
     };
-    let key = |sym: i32, state: KeyState| async move {
-        k.proxy.notify_keyboard_keysym(&k.session, sym, state, Default::default()).await
-    };
-    let err = |e: ashpd::Error| format!("Collage via le portail impossible : {}", describe(&e));
-    key(XK_CONTROL_L, KeyState::Pressed).await.map_err(err)?;
+    let (modifier, key) = paste_combo(keys);
+    let started = std::time::Instant::now();
+    tokio::time::sleep(PASTE_PRELUDE).await;
+    send_key(k, modifier, KeyState::Pressed).await?;
     tokio::time::sleep(KEY_GAP).await;
     let click = async {
-        key(XK_V, KeyState::Pressed).await?;
+        send_key(k, key, KeyState::Pressed).await?;
         tokio::time::sleep(KEY_GAP).await;
-        key(XK_V, KeyState::Released).await
+        send_key(k, key, KeyState::Released).await
     }
     .await;
     tokio::time::sleep(KEY_GAP).await;
-    // Toujours relâcher Ctrl, même si « v » a échoué.
-    let release = key(XK_CONTROL_L, KeyState::Released).await;
-    click.map_err(err)?;
-    release.map_err(err)
+    // Toujours relâcher le modificateur, même si la touche a échoué.
+    let release = send_key(k, modifier, KeyState::Released).await;
+    log::info!("collage via le portail ({keys:?}) : {} en {} ms", if click.is_ok() && release.is_ok() { "envoyé" } else { "échec" }, started.elapsed().as_millis());
+    click?;
+    release
+}
+
+/// Saisit `text` caractère par caractère par le portail (sans presse-papiers). Bloquant.
+pub fn type_blocking(app: &AppHandle, text: &str) -> Result<(), String> {
+    let app = app.clone();
+    let text = text.to_string();
+    let budget = CALL_TIMEOUT + TYPE_GAP * 3 * text.chars().count() as u32;
+    tauri::async_runtime::block_on(async move {
+        tokio::time::timeout(budget, type_text(&app, &text))
+            .await
+            .map_err(|_| "Délai dépassé pendant la saisie via le portail".to_string())?
+    })
+}
+
+async fn type_text(app: &AppHandle, text: &str) -> Result<(), String> {
+    let p = portals(app);
+    let guard = p.keyboard.lock().await;
+    let Some(k) = guard.as_ref() else {
+        return Err("Contrôle du clavier non autorisé".into());
+    };
+    let started = std::time::Instant::now();
+    tokio::time::sleep(PASTE_PRELUDE).await;
+    for c in text.chars() {
+        let ev = PortalKey::Sym(keysym_for(c));
+        send_key(k, ev, KeyState::Pressed).await?;
+        tokio::time::sleep(TYPE_GAP).await;
+        send_key(k, ev, KeyState::Released).await?;
+        tokio::time::sleep(TYPE_GAP).await;
+    }
+    log::info!("saisie directe via le portail : {} caractères en {} ms", text.chars().count(), started.elapsed().as_millis());
+    Ok(())
 }
 
 /// Envoie Entrée par le portail (mot de validation). Bloquant, comme [`paste_blocking`].
@@ -624,4 +707,26 @@ pub fn notify(app: &AppHandle, title: &str, body: &str) {
             log::debug!("notification : {e}");
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keysyms_des_caracteres() {
+        assert_eq!(keysym_for('a'), 0x61);
+        assert_eq!(keysym_for('é'), 0xe9);
+        assert_eq!(keysym_for('«'), 0xab);
+        assert_eq!(keysym_for('\n'), XK_RETURN);
+        assert_eq!(keysym_for('œ'), 0x0100_0153);
+        assert_eq!(keysym_for('…'), 0x0100_2026);
+    }
+
+    #[test]
+    fn combinaisons_de_collage() {
+        assert!(matches!(paste_combo(WaylandPasteKeys::CtrlV), (PortalKey::Sym(XK_CONTROL_L), PortalKey::Sym(XK_V))));
+        assert!(matches!(paste_combo(WaylandPasteKeys::CtrlVKeycode), (PortalKey::Code(29), PortalKey::Code(47))));
+        assert!(matches!(paste_combo(WaylandPasteKeys::ShiftInsert), (PortalKey::Sym(XK_SHIFT_L), PortalKey::Sym(XK_INSERT))));
+    }
 }

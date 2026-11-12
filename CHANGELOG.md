@@ -1,5 +1,28 @@
 # Historique des versions
 
+## 0.1.8 — 12 novembre 2026
+
+- Fenêtre dictaphone (menu de l'icône ou accueil) : dicter en plusieurs fois avec Enregistrer / Pause,
+  voir le texte en direct, le corriger, cliquer n'importe où pour y ajouter une phrase dictée, puis
+  « Insérer dans l'application » (Ctrl + Entrée) colle le tout là où l'on était. Pas d'arrêt automatique
+  sur silence dans cette fenêtre ; le brouillon est conservé si on la ferme.
+- Ponctuation dictée : « point nouveau paragraphe », « point à la ligne », « points de suspension »,
+  « guillemets ouvrants / fermants », « trait d'union ». Les deux formes d'apostrophe sont reconnues.
+- Ponctuation ajoutée par Whisper : dès qu'un signe est prononcé dans une dictée, les points et virgules
+  que Whisper avait ajoutés aux pauses sont retirés, avec la majuscule qui suivait (réglable : garder,
+  si je dicte, toujours). Le point final non dicté disparaît aussi.
+- Majuscules : plus de majuscule après une virgule, un point-virgule ou deux-points ; majuscule après un
+  retour à la ligne réglable. Les noms propres probables gardent la leur.
+- Table de ponctuation personnelle (« esperluette » → &, « paragraphe » → §…) et fichier d'instructions
+  texte à exporter, modifier et réimporter, avec les règles ci-dessus.
+- Interface : zoom avec Ctrl + molette ou Ctrl + / − / 0 (Cmd sur macOS), mémorisé ; texte agrandi par
+  défaut (110 %).
+- Linux Wayland : délais de collage allongés, méthode de collage au choix (Ctrl+V par keysym ou par
+  keycode, Maj+Inser, frappe directe du texte) et journal de chaque appel au portail, pour les bureaux
+  où le collage échouait.
+- Modèle large-v3 quantifié Q5 (1,1 Go) au catalogue : accords et pluriels plus justes, environ trois
+  fois plus lent que turbo.
+
 ## 0.1.7 — 16 octobre 2026
 
 - Dictées de plus de 30 s : le moteur local ne perd plus de mots à la jonction des fenêtres de

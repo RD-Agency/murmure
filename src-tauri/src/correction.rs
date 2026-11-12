@@ -295,6 +295,7 @@ pub fn finalize(t: &crate::engine::Transcript, settings: &crate::settings::Setti
         short_text_plain: settings.short_text_plain,
         submit_words,
         vocabulary: &settings.initial_prompt,
+        punctuation: Some(&settings.punctuation),
     };
     let crate::postprocess::Finalized { text, submit } = crate::postprocess::finalize(&text, &post);
     let text = apply_replacements(&text, &settings.replacements);
@@ -558,7 +559,8 @@ mod tests {
         };
         let p = finalize(&t, &s, true);
         assert_eq!(p.raw_text, "Nous sollicitons l'information du jugement point à la ligne Article L 12 32 2.");
-        assert_eq!(p.text, "Nous sollicitons l'infirmation du jugement.\nArticle L. 1232-2.");
+        // Le point final vient de Whisper, pas de la dictée : ignoré (dictée ponctuée à la voix).
+        assert_eq!(p.text, "Nous sollicitons l'infirmation du jugement.\nArticle L. 1232-2");
         assert_eq!(p.auto_corrections.len(), 1);
         // Réglage coupé : seule la règle s'applique.
         let p = finalize(&t, &Settings { auto_correct: false, ..s }, true);

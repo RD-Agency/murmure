@@ -18,6 +18,7 @@ export default defineConfig(() => ({
       input: {
         main: resolve(root, "index.html"),
         overlay: resolve(root, "overlay.html"),
+        dictaphone: resolve(root, "dictaphone.html"),
       },
     },
   },

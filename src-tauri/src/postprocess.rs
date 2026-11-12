@@ -27,6 +27,8 @@ pub struct Options<'a> {
     pub submit_words: &'a [String],
     /// Vocabulaire de l'utilisateur : ses majuscules sont respectées.
     pub vocabulary: &'a str,
+    /// Règles de la ponctuation dictée ; `None` = règles des versions 0.1.x.
+    pub punctuation: Option<&'a crate::punctuation::Rules>,
 }
 
 /// Texte prêt à coller, et faut-il appuyer sur Entrée ensuite.
@@ -45,7 +47,10 @@ pub fn finalize(raw: &str, opts: &Options) -> Finalized {
     };
     let punctuate = |t: &str| {
         if opts.spoken_punctuation {
-            crate::punctuation::apply_fr(t)
+            match opts.punctuation {
+                Some(rules) => crate::punctuation::apply_fr_with(t, rules),
+                None => crate::punctuation::apply_fr(t),
+            }
         } else {
             t.to_string()
         }
@@ -182,7 +187,7 @@ mod tests {
     }
 
     fn opts(words: &[String]) -> Options<'_> {
-        Options { spoken_punctuation: true, short_text_plain: true, submit_words: words, vocabulary: "" }
+        Options { spoken_punctuation: true, short_text_plain: true, submit_words: words, vocabulary: "", punctuation: None }
     }
 
     fn run(raw: &str) -> Finalized {

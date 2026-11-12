@@ -163,6 +163,7 @@ pub async fn transcribe_file(app: AppHandle, job: State<'_, FileJob>, path: Stri
         short_text_plain: false,
         submit_words: &[],
         vocabulary: &settings.initial_prompt,
+        punctuation: Some(&settings.punctuation),
     };
     let text = postprocess::finalize(&parts.join(" "), &opts).text;
     if text.is_empty() {
