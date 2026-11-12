@@ -34,7 +34,7 @@ const DEFAULT_SETTINGS: Settings = {
   spoken_punctuation: true,
   short_text_plain: true,
   punctuation: {
-    whisper_punctuation: "ignore_when_dictated",
+    whisper_punctuation: "ignore",
     capitalize_after_newline: true,
     lowercase_after_comma: true,
     custom: [

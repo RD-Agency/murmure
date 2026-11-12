@@ -2,8 +2,9 @@
 
 - **Fenêtre dictaphone** : dictez en plusieurs fois (Enregistrer / Pause), relisez et corrigez le texte,
   ajoutez une phrase où vous voulez, puis insérez le tout dans votre document.
-- **Ponctuation dictée plus fidèle** : « point nouveau paragraphe », « points de suspension », guillemets ;
-  quand vous dictez la ponctuation, celle que Whisper ajoutait seul aux pauses disparaît.
+- **Ponctuation dictée plus fidèle** : « point nouveau paragraphe », « points de suspension », guillemets.
+  Seule la ponctuation que vous prononcez est écrite ; celle que Whisper ajoutait seul aux pauses disparaît
+  (réglable, « Garder » rétablit l'ancien comportement).
 - **Plus de majuscule après une virgule**, et majuscule après un retour à la ligne au choix.
 - **Vos propres signes** (« esperluette » → &) et un fichier d'instructions à partager entre confrères.
 - **Zoom de l'interface** avec Ctrl + molette.

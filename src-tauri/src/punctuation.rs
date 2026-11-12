@@ -41,9 +41,9 @@ pub enum WhisperPunctuation {
     /// Toujours gardée (comportement des versions 0.1.x).
     Keep,
     /// Ignorée dès que la dictée contient au moins un signe prononcé.
-    #[default]
     IgnoreWhenDictated,
-    /// Toujours ignorée : seule la ponctuation prononcée compte.
+    /// Toujours ignorée : seule la ponctuation prononcée compte (par défaut).
+    #[default]
     Ignore,
 }
 
@@ -479,6 +479,12 @@ fn is_common(word: &str, lower_words: &std::collections::HashSet<String>) -> boo
     if let Some((head, _)) = lower.split_once(['\'', '’']) {
         return COMMON_WORDS.contains(head);
     }
+    // Inversion verbe-sujet : « Pouvez-vous », « Est-il », « Voulez-vous ».
+    if let Some((head, tail)) = lower.split_once('-')
+        && (FUNCTION_WORD.is_match(&upper_first(tail)) || COMMON_WORDS.contains(tail))
+    {
+        return COMMON_WORDS.contains(head) || lower_words.contains(head);
+    }
     FUNCTION_WORD.is_match(core) || COMMON_WORDS.contains(lower.as_str()) || lower_words.contains(&lower)
 }
 
@@ -532,9 +538,10 @@ fn compose(s: &str, marks: &[Spec], rules: &Rules, strip_whisper: bool, lower_wo
             continue;
         }
         // Ponctuation de Whisper : seule sur son jeton (« ? ») ou collée au mot (« point. »).
+        let whisper_weak = strip_whisper && token.ends_with([',', ';', ':']);
         let (token, whisper_stop) = if strip_whisper { strip_whisper_mark(token) } else { (token.to_string(), false) };
         if token.is_empty() || !token.chars().any(char::is_alphanumeric) && strip_whisper {
-            if whisper_stop && !prev_mark {
+            if (whisper_stop || (rules.lowercase_after_comma && whisper_weak)) && !prev_mark {
                 lower_next = true;
             }
             continue;
@@ -554,9 +561,10 @@ fn compose(s: &str, marks: &[Spec], rules: &Rules, strip_whisper: bool, lower_wo
         glue_next = false;
         prev_mark = false;
         if strip_whisper {
-            // Whisper avait mis un point : la phrase continue, sa majuscule suivante est retirée.
+            // Whisper avait mis un point (ou une virgule) : la phrase continue, sa majuscule suivante
+            // est retirée.
             capitalize = false;
-            lower_next = whisper_stop;
+            lower_next = whisper_stop || (comma_rule && whisper_weak);
         } else {
             let bare = word.trim_end_matches(['.', '?', '!']);
             capitalize = word.ends_with(['.', '?', '!']) && !is_abbreviation(bare);
@@ -625,8 +633,14 @@ mod tests {
         let t = "Je vous propose de caler un point jeudi à 14h. Pouvez-vous me confirmer votre disponibilité ?";
         assert_eq!(apply_fr(t), t);
         assert_eq!(apply_fr("Du point de vue du client, c'est réglé."), "Du point de vue du client, c'est réglé.");
-        // Règles par défaut : sans signe dicté, la ponctuation de Whisper reste.
-        assert_eq!(apply_fr_with(t, &Rules::default()), t);
+        // « Si je dicte » : sans signe dicté, la ponctuation de Whisper reste.
+        let when = Rules { whisper_punctuation: WhisperPunctuation::IgnoreWhenDictated, ..Rules::default() };
+        assert_eq!(apply_fr_with(t, &when), t);
+        // Par défaut (« toujours ») : seule la ponctuation dictée est écrite.
+        assert_eq!(
+            apply_fr_with(t, &Rules::default()),
+            "Je vous propose de caler un point jeudi à 14h pouvez-vous me confirmer votre disponibilité"
+        );
     }
 
     #[test]
@@ -755,7 +769,10 @@ mod tests {
             "En conséquence ; nous sollicitons le renvoi."
         );
         // Sans signe dicté : la virgule de Whisper suivie d'une majuscule.
-        assert_eq!(apply_fr_with("Bonjour, Veuillez noter que, Il est absent.", &rules), "Bonjour, veuillez noter que, il est absent.");
+        let when = Rules { whisper_punctuation: WhisperPunctuation::IgnoreWhenDictated, ..Rules::default() };
+        assert_eq!(apply_fr_with("Bonjour, Veuillez noter que, Il est absent.", &when), "Bonjour, veuillez noter que, il est absent.");
+        // Par défaut : les virgules de Whisper partent, et leur majuscule avec.
+        assert_eq!(apply_fr_with("Bonjour, Veuillez noter que, Il est absent.", &rules), "Bonjour veuillez noter que il est absent");
         // Nom propre probable : gardé.
         assert_eq!(apply_fr_with("Bonjour virgule Durand point", &rules), "Bonjour, Durand.");
         assert_eq!(apply_fr_with("Objet deux points RGPD point", &rules), "Objet : RGPD.");
