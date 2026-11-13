@@ -406,7 +406,7 @@ mod linux_rpm {
 
     #[cfg(target_os = "linux")]
     pub(super) fn applies() -> bool {
-        matches!(tauri::utils::platform::bundle_type(), Some(tauri::utils::platform::BundleType::Rpm))
+        matches!(tauri::utils::platform::bundle_type(), Some(tauri::utils::config::BundleType::Rpm))
     }
 
     #[cfg(not(target_os = "linux"))]
