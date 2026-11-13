@@ -9,7 +9,8 @@
 //! - Redémarrage automatique dès que l'app est inactive (aucune dictée, aucun téléchargement de
 //!   modèle, fenêtre principale masquée) depuis [`IDLE_BEFORE_RESTART`] : relance masquée via un
 //!   marqueur `relaunch-hidden`, l'utilisateur ne voit rien. Windows installe aussi en quittant.
-//! - Linux .deb / .rpm : l'installation exige root, la mise à jour est seulement annoncée.
+//! - Linux .deb / .rpm : l'installation exige root, la mise à jour est seulement annoncée. Le .rpm
+//!   s'installe par dnf ou zypper (`rpm -U` refuse les paquets non signés depuis RPM 6).
 //! - Manifeste absent (404), réseau coupé, plateforme absente du manifeste : log debug uniquement.
 
 use crate::state::{AppState, Phase};
@@ -343,33 +344,115 @@ pub async fn install(app: &AppHandle) -> Result<(), String> {
     let progress_app = app.clone();
     let mut downloaded: u64 = 0;
     let mut last_emit = Instant::now() - Duration::from_secs(1);
-    let result = update
-        .download_and_install(
-            move |chunk, total| {
-                downloaded += chunk as u64;
-                let total = total.unwrap_or(0);
-                if last_emit.elapsed() >= Duration::from_millis(100) || (total > 0 && downloaded >= total) {
-                    last_emit = Instant::now();
-                    let _ = progress_app.emit("update-progress", UpdateProgress { downloaded, total });
-                }
-            },
-            || log::info!("mise à jour téléchargée, installation…"),
-        )
-        .await;
+    let on_chunk = move |chunk: usize, total: Option<u64>| {
+        downloaded += chunk as u64;
+        let total = total.unwrap_or(0);
+        if last_emit.elapsed() >= Duration::from_millis(100) || (total > 0 && downloaded >= total) {
+            last_emit = Instant::now();
+            let _ = progress_app.emit("update-progress", UpdateProgress { downloaded, total });
+        }
+    };
+    let on_finish = || log::info!("mise à jour téléchargée, installation…");
+    let result = if linux_rpm::applies() {
+        // Paquet .rpm : `rpm -U` (chemin du plugin) refuse les paquets non signés depuis RPM 6
+        // (Fedora 45). Téléchargement et vérification de signature par le plugin, installation par
+        // dnf ou zypper, avec une seule demande de mot de passe.
+        match update.download(on_chunk, on_finish).await {
+            Ok(bytes) => tauri::async_runtime::spawn_blocking(move || linux_rpm::install(&bytes))
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|r| r),
+            Err(e) => Err(describe_error(&e)),
+        }
+    } else {
+        update.download_and_install(on_chunk, on_finish).await.map_err(|e| describe_error(&e))
+    };
 
-    if let Err(e) = result {
-        log::warn!("échec de l'installation de la mise à jour : {e}");
+    if let Err(msg) = result {
+        log::warn!("échec de l'installation de la mise à jour : {msg}");
         crate::tray::set_update_installing(app, false);
         crate::tray::show_update(app, &update.version);
-        return Err(if is_network(&e) {
-            "Téléchargement interrompu. Vérifiez votre connexion et réessayez.".to_string()
-        } else {
-            format!("Échec de l'installation : {e}")
-        });
+        return Err(msg);
     }
 
     log::info!("mise à jour {} installée, redémarrage", update.version);
     app.restart();
+}
+
+fn describe_error(e: &UpdaterError) -> String {
+    if is_network(e) {
+        "Téléchargement interrompu. Vérifiez votre connexion et réessayez.".to_string()
+    } else {
+        format!("Échec de l'installation : {e}")
+    }
+}
+
+/// Installation d'une mise à jour .rpm par le gestionnaire de paquets de la distribution.
+mod linux_rpm {
+    /// Commande d'installation (lancée via `pkexec`) selon les outils présents.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(super) fn command(has_dnf: bool, has_zypper: bool, path: &str) -> Vec<String> {
+        let args: &[&str] = if has_dnf {
+            // dnf ne vérifie pas la signature OpenPGP d'un fichier local ; --nogpgcheck l'assure
+            // aussi avec un `localpkg_gpgcheck` activé.
+            &["dnf", "install", "-y", "--nogpgcheck"]
+        } else if has_zypper {
+            &["zypper", "--non-interactive", "install", "--allow-unsigned-rpm"]
+        } else {
+            &["rpm", "-U", "--nosignature"]
+        };
+        args.iter().map(|a| a.to_string()).chain(std::iter::once(path.to_string())).collect()
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn applies() -> bool {
+        matches!(tauri::utils::platform::bundle_type(), Some(tauri::utils::config::BundleType::Rpm))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub(super) fn applies() -> bool {
+        false
+    }
+
+    #[cfg(target_os = "linux")]
+    fn on_path(bin: &str) -> bool {
+        std::env::var_os("PATH")
+            .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(bin).is_file()))
+            || ["/usr/bin", "/usr/sbin", "/bin", "/sbin"].iter().any(|d| std::path::Path::new(d).join(bin).is_file())
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn install(bytes: &[u8]) -> Result<(), String> {
+        let dir = std::env::temp_dir().join(format!("murmure-maj-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).map_err(|e| format!("Dossier temporaire : {e}"))?;
+        let path = dir.join("murmure.rpm");
+        std::fs::write(&path, bytes).map_err(|e| format!("Écriture du paquet : {e}"))?;
+        let cmd = command(on_path("dnf"), on_path("zypper"), &path.to_string_lossy());
+        log::info!("installation de la mise à jour : pkexec {}", cmd.join(" "));
+        let out = std::process::Command::new("pkexec").args(&cmd).output();
+        let _ = std::fs::remove_dir_all(&dir);
+        let out = out.map_err(|e| format!("pkexec introuvable ({e}). Installez la mise à jour depuis la page de téléchargement."))?;
+        if out.status.success() {
+            return Ok(());
+        }
+        // pkexec : 126 = mot de passe refusé ou fenêtre fermée, 127 = non autorisé.
+        if matches!(out.status.code(), Some(126 | 127)) {
+            return Err("Mise à jour annulée : le mot de passe administrateur n'a pas été donné.".into());
+        }
+        let err = String::from_utf8_lossy(&out.stderr);
+        let tail: Vec<&str> = err.lines().filter(|l| !l.trim().is_empty()).rev().take(3).collect();
+        log::warn!("{} : {err}", cmd[0]);
+        Err(format!(
+            "Échec de l'installation ({}) : {}",
+            cmd[0],
+            tail.into_iter().rev().collect::<Vec<_>>().join(" ")
+        ))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub(super) fn install(_bytes: &[u8]) -> Result<(), String> {
+        Err("Installation .rpm réservée à Linux".into())
+    }
 }
 
 #[cfg(test)]
@@ -421,6 +504,14 @@ mod tests {
         assert!(take_relaunch_hidden(&dir));
         assert!(!take_relaunch_hidden(&dir));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn commande_rpm_selon_la_distribution() {
+        let p = "/tmp/m.rpm";
+        assert_eq!(linux_rpm::command(true, false, p), ["dnf", "install", "-y", "--nogpgcheck", p]);
+        assert_eq!(linux_rpm::command(false, true, p), ["zypper", "--non-interactive", "install", "--allow-unsigned-rpm", p]);
+        assert_eq!(linux_rpm::command(false, false, p), ["rpm", "-U", "--nosignature", p]);
     }
 
     #[test]

@@ -1,3 +1,9 @@
+## Nouveautés de la 0.1.9
+
+- **Mise à jour sous Fedora 45** : le bouton de mise à jour de Murmure fonctionne de nouveau avec les
+  paquets .rpm (une seule demande de mot de passe). Depuis la 0.1.8, réinstallez une fois avec la
+  commande de la page de téléchargement.
+
 ## Nouveautés de la 0.1.8
 
 - **Fenêtre dictaphone** : dictez en plusieurs fois (Enregistrer / Pause), relisez et corrigez le texte,

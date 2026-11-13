@@ -1,5 +1,12 @@
 # Historique des versions
 
+## 0.1.9 — 13 novembre 2026
+
+- Linux .rpm : la mise à jour depuis Murmure s'installe par `dnf` (Fedora) ou `zypper` (openSUSE),
+  avec une seule demande de mot de passe. Sur Fedora 45, `rpm` refuse désormais les paquets non signés
+  et la mise à jour échouait après deux demandes de mot de passe. Depuis une 0.1.8 ou plus ancienne,
+  une installation à la main reste nécessaire une fois (commande de la page de téléchargement).
+
 ## 0.1.8 — 12 novembre 2026
 
 - Fenêtre dictaphone (menu de l'icône ou accueil) : dicter en plusieurs fois avec Enregistrer / Pause,

@@ -8,7 +8,7 @@ construits sur Ubuntu 22.04.
 | Distribution | Versions testées | Paquet |
 |---|---|---|
 | openSUSE | Leap 15.6, Leap 16.0, Tumbleweed | `.rpm` |
-| Fedora | 43, 44 | `.rpm` |
+| Fedora | 43, 44, 45 | `.rpm` |
 | Debian, Ubuntu, Linux Mint | Debian 12 et 13, Ubuntu 22.04 et 24.04, Mint 22 | `.deb` |
 | Autres | — | `.AppImage` (variante standard seulement) |
 
